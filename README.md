@@ -1,2 +1,2 @@
 # gram-tf
-A tensorflow implementation of mp2893/gram.
+A tensorflow implementation of https://github.com/mp2893/gram.
