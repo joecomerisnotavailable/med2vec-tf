@@ -45,13 +45,19 @@ parser.add_argument('--win', type=int,
                     ' of the original paper.')
 parser.add_argument('--n_epochs', type=int,
                     help='Number of epochs to train.')
+parser.add_argument('--seqs_file', type=str,
+                    help='Path to sequences file. Sequences file should'
+                    ' be list of list. See README for original'
+                    ' implementation.')
+parser.add_argument('--demo_file', type=str,
+                    help='Path to the demographics file.')
 
 args = parser.parse_args()
 
 
-def load_data(seqs_file=ags.seqs_file, demo_file=args.demo_file):
+def load_data(seqs_file=args.seqs_file, demo_file=args.demo_file):
     """Replace later with dataset stuff."""
-    seqs = pickle.load(open(seq_file, 'rb'))
+    seqs = pickle.load(open(seqs_file, 'rb'))
     D_t = pickle.load(open(demo_file, 'rb'))
     demo_dim = D_t.shape[-1]
     return seqs, D_t, demo_dim
@@ -346,7 +352,7 @@ def visits_cost(x_ts, y_2d, visit_counts, args):
     return visits_cost
 
 
-def create_vars(demo_dim, args=args)
+def create_vars(demo_dim, args=args):
     """Define weight matrices and biases."""
     W_c = tf.Variable(tf.truncated_normal([args.code_emb_dim, args.n_codes],
                       mean=0.0,
@@ -359,7 +365,7 @@ def create_vars(demo_dim, args=args)
                       mean=0.0,
                       stddev=1.0,
                       dtype=tf.float32
-                                         )
+                                          )
                       )
     W_s = tf.Variable(tf.truncated_normal([args.n_codes, args.visit_emb_dim],
                       mean=0.0,
@@ -368,16 +374,19 @@ def create_vars(demo_dim, args=args)
                                           )
                       )
 
-    b_c = tf.zeros([W_c.shape[0], 1], dtype=tf.float32)
-    b_v = tf.zeros([W_v.shape[0], 1], dtype=tf.float32)
-    b_s = tf.zeros([W_s.shape[0], 1], dtype=tf.float32)
+    b_c = tf.Variable(tf.zeros([W_c.shape[0], 1], dtype=tf.float32))
+    b_v = tf.Variable(tf.zeros([W_v.shape[0], 1], dtype=tf.float32))
+    b_s = tf.Variable(tf.zeros([W_s.shape[0], 1], dtype=tf.float32))
     return W_c, W_v, W_s, b_c, b_v, b_s
 
 
 if __name__ == '__main__':
     seqs, D_t, demo_dim = load_data()
     W_c, W_v, W_s, b_c, b_v, b_s = create_vars(demo_dim)
+
     patients, row_masks, visit_counts = tensorize_seqs(seqs)
+
+    x_ts = tf.reduce_sum(patients, -2)
 
     code_cost = codes_cost(patients, row_masks, visit_counts, W_c, b_c)
     y_2d = predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim)
@@ -385,13 +394,18 @@ if __name__ == '__main__':
 
     cost = tf.add(code_cost, visit_cost)
 
+    optimizer = tf.train.AdamOptimizer().minimize(cost)
+
     init = tf.global_variables_initializer()
-    optimizer = tf.keras.optimizersAdadelta().minimize(cost)
+
 
     with tf.Session() as sess:
+
+        sess.run(init)
+
         for ep in list(range(args.n_epochs)):
             sess.run(optimizer)
 
             if ep % 5 == 0:
 
-                print(cost)
+                print(cost.eval())
