@@ -1,7 +1,6 @@
 """Med2Vec.
 
 # TF code written by Joe Comer (joecomerisnotavailable@gmail.com)
-# Adapted from code written by Edward Choi (mp2893@gatech.edu)
 # Original implementation in Theano: https://github.com/mp2893/med2vec
 # Original paper: Multi-layer Representation Learning for Medical Concepts,
                   Choi, et al.
@@ -32,6 +31,10 @@ parser.add_argument('--n_codes', type=int,
                     help='The total number of unique medical codes.'
                     ' Note that this can be greater than the number'
                     ' of codes actually appearing in the data.')
+parser.add_argument('--n_labels', type=int,
+                    help='The total number of unique label codes.'
+                    ' Note that this can be greater than the number'
+                    ' of codes actually appearing in the data.')
 parser.add_argument('--code_emb_dim', type=int,
                     help='The dimension of the medical code embedding.')
 parser.add_argument('--visit_emb_dim', type=int,
@@ -47,7 +50,11 @@ parser.add_argument('--n_epochs', type=int,
                     help='Number of epochs to train.')
 parser.add_argument('--seqs_file', type=str,
                     help='Path to sequences file. Sequences file should'
-                    ' be list of list. See README for original'
+                    ' be list of list. See README of original'
+                    ' implementation.')
+parser.add_argument('--labels_file', type=str,
+                    help='Path to labels file. Labels file should'
+                    ' be list of list. See README of original'
                     ' implementation.')
 parser.add_argument('--demo_file', type=str,
                     help='Path to the demographics file.')
@@ -55,12 +62,20 @@ parser.add_argument('--demo_file', type=str,
 args = parser.parse_args()
 
 
-def load_data(seqs_file=args.seqs_file, demo_file=args.demo_file):
+def load_data(args=args):
     """Replace later with dataset stuff."""
+    seqs_file = args.seqs_file
+    if args.labels_file is not None:
+        labels_file = args.labels_file
+    demo_file = args.demo_file
     seqs = pickle.load(open(seqs_file, 'rb'))
+    labs = None
+    if args.labels_file is not None:
+        labels_file = args.labels_file
+        labs = pickle.load(open(labels_file, 'rb'))
     D_t = pickle.load(open(demo_file, 'rb'))
     demo_dim = D_t.shape[-1]
-    return seqs, D_t, demo_dim
+    return seqs, labs, D_t, demo_dim
 
 
 def fill_visit(visit, args=args):
@@ -110,13 +125,16 @@ def fill_patient(patient, mask_batch, args=args):
     return new_patient, new_mask_batch, t
 
 
-def tensorize_seqs(seqs, args=args):
+def tensorize_seqs(seqs, args=args, true_seqs=True):
     """Convert med2vec to tensorflow data.
 
     seqs: list of list. cf  https://github.com/mp2893/med2vec
-
+    true_seqs: bool. Are we tensorizing the true sequences? If false,
+               we are tonsorizing labels.
     returns:
         patients: tensor with shape [patients, max_t, max_v, |C|]
+                  or [patients, max_t, max_v, n_labels] if true_seqs is
+                  False.
         row_masks: numpy array with shape [patients, max_t, max_v]
                Later, we will create a [patients, max_t, max_v, |C|]
                tensor where the [p, t, i, j] entry is p(c_j|c_i).
@@ -131,8 +149,9 @@ def tensorize_seqs(seqs, args=args):
                The masks are to be applied in reverse order of creation.
                col_mask is applied with tf.multiply and row_masks
                with tf.boolean_mask to avoid needless reshaping.
+        patients_ts: numpy array with shape [patients,] containing the
+                     number of true visits for each patient.
     """
-    n_codes = args.n_codes
     patients = []
     new_patient = []
     row_masks = []
@@ -147,13 +166,17 @@ def tensorize_seqs(seqs, args=args):
                                                       mask_batch,
                                                       args)
             patients.append(new_patient)
-            patients_ts.append(t)
-            row_masks.append(mask_batch)
+            if true_seqs:
+                patients_ts.append(t)
+                row_masks.append(mask_batch)
+                mask_batch = []
             new_patient = []
-            mask_batch = []
     patients = np.array(patients)
     row_masks = (patients != -2)
-    patients = tf.one_hot(patients, depth=n_codes)
+    if true_seqs:
+        patients = tf.one_hot(patients, depth=args.n_codes)
+    else:
+        patients = tf.one_hot(patients, depth=args.n_labels)
     return patients, row_masks, np.array(patients_ts, dtype=np.float32)
 
 
@@ -276,14 +299,21 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
     return y_2d
 
 
-def visits_cost(x_ts, y_2d, visit_counts, args):
-    """Calculate the visits cost."""
+def visits_cost(labels, y_2d, visit_counts, args):
+    """Calculate the visits cost.
+
+    labels: If there is no labels file, the labels are just x_ts.
+    y_2d:   Output of predictions.
+    visit_counts: A tensor of the number of true visits for each patient.
+
+    outputs: The scalar visits prediction cost. 
+    """
 
     # We'll add the x vectors within the window before taking the dot
     # product with \hat{y}_t. To do this, we need to use a sliding
     # window, and to make sure patients' sums don't gather terms
     # from other patients, we need to pad each patient
-    x_pad = tf.pad(x_ts, [[0, 0], [args.win, args.win], [0, 0]])
+    x_pad = tf.pad(labels, [[0, 0], [args.win, args.win], [0, 0]])
 
     # Because different \hat{y}_t have different numbers of
     # neighboring x_t in their window, we can't really avoid passing
@@ -300,8 +330,8 @@ def visits_cost(x_ts, y_2d, visit_counts, args):
     normed_x_pad = x_pad / tf.reshape(visit_counts, [args.n_patients, 1, 1])
     normed_z_pad = z_pad / tf.reshape(visit_counts, [args.n_patients, 1, 1])
 
-    normed_x_pad_2d = tf.reshape(normed_x_pad, [-1, args.n_codes])
-    normed_z_pad_2d = tf.reshape(normed_z_pad, [-1, args.n_codes])
+    normed_x_pad_2d = tf.reshape(normed_x_pad, [-1, args.n_labels])
+    normed_z_pad_2d = tf.reshape(normed_z_pad, [-1, args.n_labels])
 
     # Before we padded around each patient. Now pad around the entire
     # list of visits
@@ -367,7 +397,7 @@ def create_vars(demo_dim, args=args):
                       dtype=tf.float32
                                           )
                       )
-    W_s = tf.Variable(tf.truncated_normal([args.n_codes, args.visit_emb_dim],
+    W_s = tf.Variable(tf.truncated_normal([args.n_labels, args.visit_emb_dim],
                       mean=0.0,
                       stddev=1.0,
                       dtype=tf.float32
@@ -381,16 +411,25 @@ def create_vars(demo_dim, args=args):
 
 
 if __name__ == '__main__':
-    seqs, D_t, demo_dim = load_data()
+    seqs, labs, D_t, demo_dim = load_data()
     W_c, W_v, W_s, b_c, b_v, b_s = create_vars(demo_dim)
 
     patients, row_masks, visit_counts = tensorize_seqs(seqs)
 
     x_ts = tf.reduce_sum(patients, -2)
 
+    if args.labels_file is not None:
+        labels, _, _ = tensorize_seqs(labs, true_seqs=False)
+        # The call to tf.minimum is because labels may not be unique in
+        # visits like ICDs/medical codes are. For example, if labels are
+        # based on CSS groupings.
+        labels = tf.minimum(tf.reduce_sum(labels, -2), 1)
+    else:
+        labels = x_ts
+
     code_cost = codes_cost(patients, row_masks, visit_counts, W_c, b_c)
     y_2d = predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim)
-    visit_cost = visits_cost(x_ts, y_2d, visit_counts, args)
+    visit_cost = visits_cost(labels, y_2d, visit_counts, args)
 
     cost = tf.add(code_cost, visit_cost)
 
