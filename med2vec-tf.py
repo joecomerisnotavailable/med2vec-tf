@@ -67,14 +67,17 @@ def load_data(args=args):
     seqs_file = args.seqs_file
     if args.labels_file is not None:
         labels_file = args.labels_file
-    demo_file = args.demo_file
     seqs = pickle.load(open(seqs_file, 'rb'))
     labs = None
     if args.labels_file is not None:
         labels_file = args.labels_file
         labs = pickle.load(open(labels_file, 'rb'))
-    D_t = pickle.load(open(demo_file, 'rb'))
-    demo_dim = D_t.shape[-1]
+    D_t = None
+    demo_dim = 0
+    if args.demo_file is not None:
+        demo_file = args.demo_file
+        D_t = pickle.load(open(demo_file, 'rb'))
+        demo_dim = D_t.shape[-1]
     return seqs, labs, D_t, demo_dim
 
 
@@ -172,12 +175,13 @@ def tensorize_seqs(seqs, args=args, true_seqs=True):
                 mask_batch = []
             new_patient = []
     patients = np.array(patients)
+    patients_ts = np.array(patients_ts, dtype=np.float32)
     row_masks = (patients != -2)
     if true_seqs:
         patients = tf.one_hot(patients, depth=args.n_codes)
     else:
         patients = tf.one_hot(patients, depth=args.n_labels)
-    return patients, row_masks, np.array(patients_ts, dtype=np.float32)
+    return patients, row_masks, patients_ts
 
 
 def col_masks(patients, args=args):
@@ -274,7 +278,8 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
     dummy_visit_mask = tf.minimum(tf.reduce_sum(x_2d, -1), 1)
     dummy_visit_mask = tf.reshape(dummy_visit_mask, [-1,])
 
-    d_2d = tf.reshape(D_t, [-1, demo_dim])
+    if D_t is not None:
+        d_2d = tf.reshape(D_t, [-1, demo_dim])
 
     u_ts = tf.matmul(W_c, x_2d, transpose_b=True)
     u_ts = tf.add(u_ts, b_c)
@@ -306,7 +311,7 @@ def visits_cost(labels, y_2d, visit_counts, args):
     y_2d:   Output of predictions.
     visit_counts: A tensor of the number of true visits for each patient.
 
-    outputs: The scalar visits prediction cost. 
+    outputs: The scalar visits prediction cost.
     """
 
     # We'll add the x vectors within the window before taking the dot
