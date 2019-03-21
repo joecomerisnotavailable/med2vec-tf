@@ -86,7 +86,8 @@ def parse_lab_dem(example_proto, args=args):
     demo = tf.reshape(seq_parsed['demo'], output_shape)
     row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
     patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
-    return (patient, label, demo, row_mask, patient_t)
+    return {'patient': patient, 'label': label, 'demo': demo,
+            'row_mask': row_mask, 'patient_t': patient_t}
 
 
 def parse_lab(example_proto, args=args):
@@ -112,7 +113,8 @@ def parse_lab(example_proto, args=args):
     label = tf.reshape(seq_parsed['label'], output_shape)
     row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
     patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
-    return (patient, label, row_mask, patient_t)
+    return {'patient': patient, 'label': label,
+            'row_mask': row_mask, 'patient_t': patient_t}
 
 
 def parse_dem(example_proto, args=args):
@@ -138,7 +140,8 @@ def parse_dem(example_proto, args=args):
     demo = tf.reshape(seq_parsed['demo'], output_shape)
     row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
     patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
-    return (patient, demo, row_mask, patient_t)
+    return {'patient': patient, 'demo': demo,
+            'row_mask': row_mask, 'patient_t': patient_t}
 
 
 def parse(example_proto, args=args):
@@ -162,7 +165,8 @@ def parse(example_proto, args=args):
     patient = tf.reshape(seq_parsed['patient'], output_shape)
     row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
     patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
-    return (patient, row_mask, patient_t)
+    return {'patient': patient,
+            'row_mask': row_mask, 'patient_t': patient_t}
 
 
 def choose_parse_function(args=args):
@@ -418,6 +422,8 @@ if __name__ == '__main__':
     _, _, filenames = os.walk(args.data_dir)
     training_files, holdout = train_test_split(filenames, 0.25)
     validation_files, test_files = train_test_split(holdout, 0.4)
+
+    data
 
     W_c, W_v, W_s, b_c, b_v, b_s = create_vars(demo_dim)
 
