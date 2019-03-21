@@ -71,8 +71,6 @@ args = parser.parse_args()
 def load_data(args=args):
     """Replace later with dataset stuff."""
     seqs_file = args.seqs_file
-    if args.labels_file is not None:
-        labels_file = args.labels_file
     seqs = pickle.load(open(seqs_file, 'rb'))
     labs = None
     if args.labels_file is not None:
@@ -190,10 +188,11 @@ def tensorize_seqs(seqs, args=args, true_seqs=True):
     row_masks = tf.reshape(row_masks, [args.n_patients, -1])
     return patients, row_masks, patients_ts
 
-#########Try using a dictionary-based dataset instead of tuples?
-#########Then make argument of tf_serialize just a_dict and create the
-#########List of arguments in a separate line before the call to py_func
-def serialize(patient, label, demo, row_mask, patient_t, args=args):
+
+# It feels a little ugly to have four versions of each function, but
+# the alternative would be to map one function that checks for labels
+# and demo inside of it, which would slow things down needlessly.
+def serialize_lab_dem(patient, label, demo, row_mask, patient_t, args=args):
     """Turn each row of zipped dataset to example protos for writing to TFR."""
     ex = tf.train.SequenceExample()
     # Non-sequential features of the Example
@@ -202,29 +201,97 @@ def serialize(patient, label, demo, row_mask, patient_t, args=args):
     ex.context.feature["max_v"].int64_list.value.append(args.max_v)
     # Feature lists for the "sequential" features of the Example
     fl_patients = ex.feature_lists.feature_list["patient"]
-    if args.labels_file is not None:
-        fl_labels = ex.feature_lists.feature_list["label"]
-    else:
-        label = [None] * len(patient)
-    if args.demo_file is not None:
-        fl_demo = ex.feature_lists.feature_list["demo"]
-    else:
-        demo = [None] * len(patient)
+    fl_labels = ex.feature_lists.feature_list["label"]
+    fl_demo = ex.feature_lists.feature_list["demo"]
     fl_row_masks = ex.feature_lists.feature_list["row_mask"]
     for visit, lab, dem, mask in zip(patient, label, demo, row_mask):
         fl_patients.feature.add().int64_list.value.append(visit)
-        if args.labels_file is not None:
-            fl_labels.feature.add().int64_list.value.append(lab)
-        if args.demo_file is not None:
-            fl_demo.feature.add().float_list.value.append(dem)
+        fl_labels.feature.add().int64_list.value.append(lab)
+        fl_demo.feature.add().float_list.value.append(dem)
         fl_row_masks.feature.add().int64_list.value.append(mask)
     return ex.SerializeToString()
 
 
-def tf_serialize(patient, label, demo, row_mask, patient_t):
+def serialize_lab(patient, label, row_mask, patient_t, args=args):
+    """Turn each row of zipped dataset to example protos for writing to TFR."""
+    ex = tf.train.SequenceExample()
+    # Non-sequential features of the Example
+    ex.context.feature["patient_t"].int64_list.value.append(patient_t)
+    ex.context.feature["max_t"].int64_list.value.append(args.max_t)
+    ex.context.feature["max_v"].int64_list.value.append(args.max_v)
+    # Feature lists for the "sequential" features of the Example
+    fl_patients = ex.feature_lists.feature_list["patient"]
+    fl_labels = ex.feature_lists.feature_list["label"]
+    fl_row_masks = ex.feature_lists.feature_list["row_mask"]
+    for visit, lab, mask in zip(patient, label, row_mask):
+        fl_patients.feature.add().int64_list.value.append(visit)
+        fl_labels.feature.add().int64_list.value.append(lab)
+        fl_row_masks.feature.add().int64_list.value.append(mask)
+    return ex.SerializeToString()
+
+
+def serialize_dem(patient, demo, row_mask, patient_t, args=args):
+    """Turn each row of zipped dataset to example protos for writing to TFR."""
+    ex = tf.train.SequenceExample()
+    # Non-sequential features of the Example
+    ex.context.feature["patient_t"].int64_list.value.append(patient_t)
+    ex.context.feature["max_t"].int64_list.value.append(args.max_t)
+    ex.context.feature["max_v"].int64_list.value.append(args.max_v)
+    # Feature lists for the "sequential" features of the Example
+    fl_patients = ex.feature_lists.feature_list["patient"]
+    fl_labels = ex.feature_lists.feature_list["demo"]
+    fl_row_masks = ex.feature_lists.feature_list["row_mask"]
+    for visit, dem, mask in zip(patient, demo, row_mask):
+        fl_patients.feature.add().int64_list.value.append(visit)
+        fl_labels.feature.add().int64_list.value.append(dem)
+        fl_row_masks.feature.add().int64_list.value.append(mask)
+    return ex.SerializeToString()
+
+
+def serialize(patient, row_mask, patient_t, args=args):
+    """Turn each row of zipped dataset to example protos for writing to TFR."""
+    ex = tf.train.SequenceExample()
+    # Non-sequential features of the Example
+    ex.context.feature["patient_t"].int64_list.value.append(patient_t)
+    ex.context.feature["max_t"].int64_list.value.append(args.max_t)
+    ex.context.feature["max_v"].int64_list.value.append(args.max_v)
+    # Feature lists for the "sequential" features of the Example
+    fl_patients = ex.feature_lists.feature_list["patient"]
+    fl_row_masks = ex.feature_lists.feature_list["row_mask"]
+    for visit, dem, mask in zip(patient, row_mask):
+        fl_patients.feature.add().int64_list.value.append(visit)
+        fl_row_masks.feature.add().int64_list.value.append(mask)
+    return ex.SerializeToString()
+
+
+def tf_serialize_lab_dem(patient, label, demo, row_mask, patient_t):
     """Map serialize_with_labels to tf.data.Dataset."""
-    tf_string = tf.py_func(serialize_w_labels,
+    tf_string = tf.py_func(serialize_lab_dem,
                            (patient, label, demo, row_mask, patient_t),
+                           tf.string)
+    return tf.reshape(tf_string, ())
+
+
+def tf_serialize_lab(patient, label, row_mask, patient_t):
+    """Map serialize_with_labels to tf.data.Dataset."""
+    tf_string = tf.py_func(serialize_lab,
+                           (patient, label, row_mask, patient_t),
+                           tf.string)
+    return tf.reshape(tf_string, ())
+
+
+def tf_serialize_dem(patient, demo, row_mask, patient_t):
+    """Map serialize_with_labels to tf.data.Dataset."""
+    tf_string = tf.py_func(serialize_lab_dem,
+                           (patient, demo, row_mask, patient_t),
+                           tf.string)
+    return tf.reshape(tf_string, ())
+
+
+def tf_serialize(patient, row_mask, patient_t):
+    """Map serialize_with_labels to tf.data.Dataset."""
+    tf_string = tf.py_func(serialize_lab_dem,
+                           (patient, row_mask, patient_t),
                            tf.string)
     return tf.reshape(tf_string, ())
 
@@ -233,8 +300,24 @@ if __name__ == '__main__':
     sess = tf.Session()
     seqs, labs, demo, demo_dim = load_data()
 
+    data = []
+
     patients, row_masks, patients_ts = tensorize_seqs(seqs, true_seqs=True)
-    labels, _, _ = tensorize_seqs(labs, true_seqs=False)
+    data.append(patients)
+    if args.labels_file is not None:
+        labels, _, _ = tensorize_seqs(labs, true_seqs=False)
+        data.append(labels)
+        if demo is not None:
+            data.append(demo)
+            map_func = tf_serialize_lab_dem
+        else:
+            map_func = tf_serialize_lab
+    elif demo is not None:
+        data.append(demo)
+        map_func = tf_serialize_dem
+    else:
+        map_func = tf_serialize
+    data.extend([row_masks, patients_ts])
 
     print("patients", patients)
     print("labels", labels)
@@ -242,13 +325,11 @@ if __name__ == '__main__':
     print("row_masks", row_masks)
     print("patients_ts", patients_ts)
 
-    output = tf.data.Dataset().from_tensor_slices((patients,
-                                                   labels,
-                                                   demo,
-                                                   row_masks,
-                                                   patients_ts))
+    output = tf.data.Dataset().from_tensor_slices(data)
 
-    serialized = output.map(tf_serialize_w_labels)
+    del data
+
+    serialized = output.map(map_func)
 
     # Deprecated. Use tf.data.experimental.TFRecordWriter(...)
     writer = tf.contrib.data.TFRecordWriter(args.out_file)

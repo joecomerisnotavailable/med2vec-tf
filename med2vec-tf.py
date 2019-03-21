@@ -8,7 +8,9 @@
 
 import numpy as np
 import tensorflow as tf
+from sklearn.model_selection import train_test_split
 import pickle
+import os
 
 
 import argparse
@@ -48,140 +50,136 @@ parser.add_argument('--win', type=int,
                     ' of the original paper.')
 parser.add_argument('--n_epochs', type=int,
                     help='Number of epochs to train.')
-parser.add_argument('--seqs_file', type=str,
-                    help='Path to sequences file. Sequences file should'
-                    ' be list of list. See README of original'
-                    ' implementation.')
-parser.add_argument('--labels_file', type=str,
-                    help='Path to labels file. Labels file should'
-                    ' be list of list. See README of original'
-                    ' implementation.')
-parser.add_argument('--demo_file', type=str,
-                    help='Path to the demographics file.')
+parser.add_argument('--data_dir', type=str,
+                    help='Path to TFRecord files.', default='data')
+parser.add_argument('--demo', action='store_true',
+                    help='Include this tag if TFRecords include'
+                    ' demographic data.')
+parser.add_argument('--labels', action='store_true',
+                    help='Include this tag if TFRecords include labels.')
 
 args = parser.parse_args()
 
 
-def load_data(args=args):
-    """Replace later with dataset stuff."""
-    seqs_file = args.seqs_file
-    if args.labels_file is not None:
-        labels_file = args.labels_file
-    seqs = pickle.load(open(seqs_file, 'rb'))
-    labs = None
-    if args.labels_file is not None:
-        labels_file = args.labels_file
-        labs = pickle.load(open(labels_file, 'rb'))
-    D_t = None
-    demo_dim = 0
-    if args.demo_file is not None:
-        demo_file = args.demo_file
-        D_t = pickle.load(open(demo_file, 'rb'))
-        demo_dim = D_t.shape[-1]
-    return seqs, labs, D_t, demo_dim
+def parse_lab_dem(example_proto, args=args):
+    """Prepare TFRecords for training."""
+    ctxt_fts = {
+        "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_v": tf.FixedLenFeature([], dtype=tf.int64),
+    }
+    seq_fts = {
+        "patient": tf.FixedLenSequenceFeature([], dtype=tf.int64),
+        "label": tf.FixedLenSequenceFeature([], dtype=tf.int64),
+        "demo": tf.FixedLenSequenceFeature([], dtype=tf.float32),
+        "row_mask": tf.FixedLenSequenceFeature([], dtype=tf.int64)
+    }
+    ctxt_parsed, seq_parsed = tf.parse_single_sequence_example(
+        serialized=example_proto,
+        context_features=ctxt_fts,
+        sequence_features=seq_fts
+    )
+    output_shape = [ctxt_parsed['max_t'], ctxt_parsed['max_v']]
+    output_shape = tf.stack(output_shape)
+    patient = tf.reshape(seq_parsed['patient'], output_shape)
+    label = tf.reshape(seq_parsed['label'], output_shape)
+    demo = tf.reshape(seq_parsed['demo'], output_shape)
+    row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
+    patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
+    return (patient, label, demo, row_mask, patient_t)
 
 
-def fill_visit(visit, args=args):
-    """Fill all deficit visits with -2.
-
-    Ensure that all visits have the same number of ICDs for efficient
-    tensor logic. If a visit has fewer ICDs, filler ICDs get one-hot
-    encoded as the zero vector, so that they affect nothing.
-
-    visit: a list of integer medical codes
-
-    Note: No visit in training or testing should have more than max_v
-          visits.
-    """
-    max_v = args.max_v
-    if visit != [-1]:
-        new_visit = []
-        new_visit.extend(visit)
-        n_icd = len(visit)
-        deficit = max_v - n_icd
-        new_visit.extend([-2] * deficit)
-        return new_visit
-
-
-def fill_patient(patient, mask_batch, args=args):
-    """Ensure that all patients have max_t visits.
-
-    Create visits full of -2s, which are one-hot encoded as zero
-    vectors. This makes all patients commensurate for efficient tensor
-    logic.
-
-    patient: list of list of integer codes
-    max_t: the number of visits all patients ought to have
-
-    Note: No patient in training or test data should have more
-          than max_t visits.
-    """
-    max_t = args.max_t
-    max_v = args.max_v
-    new_patient = []
-    new_patient.extend(patient)
-    new_mask_batch = mask_batch
-    t = len(new_patient)
-    deficit = (max_t - t)
-    new_patient.extend([[-2] * max_v] * deficit)
-    new_mask_batch.append([[0] * max_v] * deficit)
-    return new_patient, new_mask_batch, t
+def parse_lab(example_proto, args=args):
+    """Prepare TFRecords for training."""
+    ctxt_fts = {
+        "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_v": tf.FixedLenFeature([], dtype=tf.int64),
+    }
+    seq_fts = {
+        "patient": tf.FixedLenSequenceFeature([], dtype=tf.int64),
+        "label": tf.FixedLenSequenceFeature([], dtype=tf.int64),
+        "row_mask": tf.FixedLenSequenceFeature([], dtype=tf.int64)
+    }
+    ctxt_parsed, seq_parsed = tf.parse_single_sequence_example(
+        serialized=example_proto,
+        context_features=ctxt_fts,
+        sequence_features=seq_fts
+    )
+    output_shape = [ctxt_parsed['max_t'], ctxt_parsed['max_v']]
+    output_shape = tf.stack(output_shape)
+    patient = tf.reshape(seq_parsed['patient'], output_shape)
+    label = tf.reshape(seq_parsed['label'], output_shape)
+    row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
+    patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
+    return (patient, label, row_mask, patient_t)
 
 
-def tensorize_seqs(seqs, args=args, true_seqs=True):
-    """Convert med2vec to tensorflow data.
+def parse_dem(example_proto, args=args):
+    """Prepare TFRecords for training."""
+    ctxt_fts = {
+        "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_v": tf.FixedLenFeature([], dtype=tf.int64),
+    }
+    seq_fts = {
+        "patient": tf.FixedLenSequenceFeature([], dtype=tf.int64),
+        "demo": tf.FixedLenSequenceFeature([], dtype=tf.float32),
+        "row_mask": tf.FixedLenSequenceFeature([], dtype=tf.int64)
+    }
+    ctxt_parsed, seq_parsed = tf.parse_single_sequence_example(
+        serialized=example_proto,
+        context_features=ctxt_fts,
+        sequence_features=seq_fts
+    )
+    output_shape = [ctxt_parsed['max_t'], ctxt_parsed['max_v']]
+    output_shape = tf.stack(output_shape)
+    patient = tf.reshape(seq_parsed['patient'], output_shape)
+    demo = tf.reshape(seq_parsed['demo'], output_shape)
+    row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
+    patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
+    return (patient, demo, row_mask, patient_t)
 
-    seqs: list of list. cf  https://github.com/mp2893/med2vec
-    true_seqs: bool. Are we tensorizing the true sequences? If false,
-               we are tonsorizing labels.
-    returns:
-        patients: tensor with shape [patients, max_t, max_v, |C|]
-                  or [patients, max_t, max_v, n_labels] if true_seqs is
-                  False.
-        row_masks: numpy array with shape [patients, max_t, max_v]
-               Later, we will create a [patients, max_t, max_v, |C|]
-               tensor where the [p, t, i, j] entry is p(c_j|c_i).
-               Row_masks will drop the rows where c_i is the zero
-               vector--that is, an NA ICD.
 
-               A separate mask, col_mask, will be created from
-               patients in order to mask, for each t, those j for
-               which c_j did not appear in visit t, as well as
-               p(c_i|c_i).
+def parse(example_proto, args=args):
+    """Prepare TFRecords for training."""
+    ctxt_fts = {
+        "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_v": tf.FixedLenFeature([], dtype=tf.int64),
+    }
+    seq_fts = {
+        "patient": tf.FixedLenSequenceFeature([], dtype=tf.int64),
+        "row_mask": tf.FixedLenSequenceFeature([], dtype=tf.int64)
+    }
+    ctxt_parsed, seq_parsed = tf.parse_single_sequence_example(
+        serialized=example_proto,
+        context_features=ctxt_fts,
+        sequence_features=seq_fts
+    )
+    output_shape = [ctxt_parsed['max_t'], ctxt_parsed['max_v']]
+    output_shape = tf.stack(output_shape)
+    patient = tf.reshape(seq_parsed['patient'], output_shape)
+    row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
+    patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
+    return (patient, row_mask, patient_t)
 
-               The masks are to be applied in reverse order of creation.
-               col_mask is applied with tf.multiply and row_masks
-               with tf.boolean_mask to avoid needless reshaping.
-        patients_ts: numpy array with shape [patients,] containing the
-                     number of true visits for each patient.
-    """
-    patients = []
-    new_patient = []
-    row_masks = []
-    mask_batch = []
-    patients_ts = []
-    for visit in seqs + [[-1]]:
-        if visit != [-1]:
-            visit = fill_visit(visit, args)
-            new_patient.append(visit)
-        else:
-            new_patient, mask_batch, t = fill_patient(new_patient,
-                                                      mask_batch,
-                                                      args)
-            patients.append(new_patient)
-            if true_seqs:
-                patients_ts.append(t)
-                row_masks.append(mask_batch)
-                mask_batch = []
-            new_patient = []
-    patients = np.array(patients)
-    patients_ts = np.array(patients_ts, dtype=np.float32)
-    row_masks = (patients != -2)
-    if true_seqs:
-        patients = tf.one_hot(patients, depth=args.n_codes)
+
+def choose_parse_function(args=args):
+    """Choose the parse function to decode TFRecords.
+
+    It seems ugly to have four separate functions, but doing these
+    checks here is more efficient than mapping a function that does the
+    checks internally to avoid the extra code."""
+    if args.labels and args.demo:
+        parse_func = parse_lab_dem
+    elif args.labels:
+        parse_func = parse_lab
+    elif args.demo:
+        parse_func = parse_dem
     else:
-        patients = tf.one_hot(patients, depth=args.n_labels)
-    return patients, row_masks, patients_ts
+        parse_func = parse
+    return parse_func
 
 
 def col_masks(patients, args=args):
@@ -416,7 +414,11 @@ def create_vars(demo_dim, args=args):
 
 
 if __name__ == '__main__':
-    seqs, labs, D_t, demo_dim = load_data()
+    parse_function = choose_parse_function()
+    _, _, filenames = os.walk(args.data_dir)
+    training_files, holdout = train_test_split(filenames, 0.25)
+    validation_files, test_files = train_test_split(holdout, 0.4)
+
     W_c, W_v, W_s, b_c, b_v, b_s = create_vars(demo_dim)
 
     patients, row_masks, visit_counts = tensorize_seqs(seqs)
