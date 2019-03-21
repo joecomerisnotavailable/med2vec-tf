@@ -50,6 +50,8 @@ parser.add_argument('--win', type=int,
                     ' of the original paper.')
 parser.add_argument('--n_epochs', type=int,
                     help='Number of epochs to train.')
+parser.add_argument('--root_dir', type=str,
+                    help='Path to root directory.', default='./')
 parser.add_argument('--data_dir', type=str,
                     help='Path to TFRecord files.', default='data')
 parser.add_argument('--demo', action='store_true',
@@ -59,6 +61,7 @@ parser.add_argument('--labels', action='store_true',
                     help='Include this tag if TFRecords include labels.')
 
 args = parser.parse_args()
+args_dict = vars(args)
 
 
 def parse_lab_dem(example_proto, args=args):
@@ -182,12 +185,16 @@ def choose_parse_function(args=args):
     checks here is more efficient than mapping a function that does the
     checks internally to avoid the extra code."""
     if args.labels and args.demo:
+        print("LAB_DEM")
         parse_func = parse_lab_dem
     elif args.labels:
+        print("LAB")
         parse_func = parse_lab
     elif args.demo:
+        print("DEM")
         parse_func = parse_dem
     else:
+        print("NO LAB OR DEM")
         parse_func = parse
     return parse_func
 
@@ -215,6 +222,7 @@ def col_masks(patients, args=args):
 
 def codes_cost(patients, row_masks, visit_counts, W_c, b_c, args=args):
     """Calculate the cost for the code embeddings."""
+    visit_counts = tf.cast(visit_counts, tf.float32)
     W_c_prime = tf.nn.relu(W_c)
 
     # tf.matmul doesn't broadcast, and we need to keep these grouped by
@@ -222,7 +230,7 @@ def codes_cost(patients, row_masks, visit_counts, W_c, b_c, args=args):
     # dummy) visit.
     W_c_tiled = tf.expand_dims(W_c_prime, 0)
     W_c_tiled = tf.expand_dims(W_c_tiled, 0)
-    W_c_tiled = tf.tile(W_c_tiled, [args.n_patients, args.max_t, 1, 1])
+    W_c_tiled = tf.tile(W_c_tiled, [2, args.max_t, 1, 1])
 
     # w_ij is a n_patients X max_t array of code_emb_dim X max_v
     # matrices whose columns are the representations of the codes
@@ -266,7 +274,7 @@ def codes_cost(patients, row_masks, visit_counts, W_c, b_c, args=args):
     # patient.
     # Mask rows corresponding to NA ICDs and p_i_i's afterward to ensure
     # patient-by-patient division.
-    visit_counts = tf.reshape(visit_counts, [args.n_patients, 1, 1, 1])
+    visit_counts = tf.expand_dims(visit_counts, -1)
     summands_w_dummies = non_norm_summands / visit_counts
     summands = tf.boolean_mask(summands_w_dummies, row_masks)
     codes_cost_per_visit = tf.reduce_sum(summands, -1)
@@ -321,7 +329,7 @@ def visits_cost(labels, y_2d, visit_counts, args):
 
     outputs: The scalar visits prediction cost.
     """
-
+    visit_counts = tf.cast(visit_counts, tf.float32)
     # We'll add the x vectors within the window before taking the dot
     # product with \hat{y}_t. To do this, we need to use a sliding
     # window, and to make sure patients' sums don't gather terms
@@ -361,17 +369,22 @@ def visits_cost(labels, y_2d, visit_counts, args):
         """
         summandx = tf.slice(x_double_pad,
                             [win_start, 0],
-                            normed_x_pad_2d.shape)
+                            totalx.shape)
         summandz = tf.slice(z_double_pad,
                             [win_start, 0],
-                            normed_z_pad_2d.shape)
+                            totalz.shape)
         return (win_start - 1,
                 tf.add(totalx, summandx),
                 tf.add(totalz, summandz))
 
     win_start = 2 * args.win
-    totalx = tf.zeros(normed_x_pad_2d.shape)
-    totalz = tf.zeros(normed_z_pad_2d.shape)
+
+    # This is a kludge to avoid needing to pass normed_x_pad_2d
+    # to sess.run() to get its shape.
+    slice_height = args.n_patients * (args.max_t + args.win * 2)
+    slice_shape = [slice_height, args.n_labels]
+    totalx = tf.Variable(np.zeros(slice_shape, dtype=np.float32), trainable=False)
+    totalz = tf.Variable(np.zeros(slice_shape, dtype=np.float32), trainable=False)
     loop_cond = lambda win_start, totalx, totalz: tf.less(-1, win_start)
     loop_fn = lambda win_start, totalx, totalz: loop_ops(win_start, totalx, totalz)
     _, window_x_total, window_z_total = tf.while_loop(loop_cond,
@@ -422,18 +435,37 @@ def create_vars(demo_dim, args=args):
     return W_c, W_v, W_s, b_c, b_v, b_s
 
 
+def get_demo_dim(filelist, parse_function, args=args):
+    """Retrieve the demo vector dimension before the full graph runs."""
+    with tf.Session() as sess:
+        temp_ds = tf.data.TFRecordDataset(filelist[0])
+        temp_it = temp_ds.make_one_shot_iterator()
+        serial = temp_it.get_next()
+        sample = parse_function(serial)['demo']
+        demo_dim = sess.run(sample).shape[-1]
+    print("FUICKFUCKFUT F", demo_dim)
+    return demo_dim
+
+
 if __name__ == '__main__':
+    data_path = args.root_dir + args.data_dir
     parse_function = choose_parse_function()
-    filenames = os.listdir('./' + args.data_dir)
-    training_files, holdout = train_test_split(filenames, test_size=0.25)
-    validation_files, test_files = train_test_split(holdout, test_size=0.4)
+    filelist = [os.path.join(data_path, filename)
+                for filename in os.listdir(data_path)]
+    if args.demo:
+        demo_dim = get_demo_dim(filelist, parse_function)
+    training_files, holdout = train_test_split(filelist,
+                                               test_size=0.25)
+    validation_files, test_files = train_test_split(holdout,
+                                                    test_size=0.4)
 
     filenames = tf.placeholder(tf.string, shape=[None])
 
     data = tf.data.TFRecordDataset(filenames)
     data = data.map(parse_function)
+
     data = data.repeat()
-    data = data.batch(2)
+    data = data.batch(args.n_patients)
     iterator = data.make_initializable_iterator()
 
     batch = iterator.get_next()
@@ -446,30 +478,31 @@ if __name__ == '__main__':
         labels = tf.one_hot(labels, args.n_labels)
     else:
         labels = patients
+        args_dict['n_labels'] = args.n_patients
     if args.demo:
         demo = batch['demo']
-        print(demo.shape.as_list())
-        demo_dim = demo.shape.as_list()[-1]
     else:
         demo = None
         demo_dim = 0
     row_masks = batch['row_mask']
-    patients_ts = batch['patient_t']
+    visit_counts = batch['patient_t']
 
     W_c, W_v, W_s, b_c, b_v, b_s = create_vars(demo_dim)
 
     x_ts = tf.reduce_sum(patients, -2)
 
-    if args.labels_file is not None:
-        # The call to tf.minimum is because labels may not be unique in
-        # visits like ICDs/medical codes are. For example, if labels are
-        # based on CSS groupings.
+    if args.labels:
+        # The call to tf.minimum is because labels may not be unique
+        # in visits like ICDs/medical codes are. For example, if
+        # labels are based on CSS groupings.
         labels = tf.minimum(tf.reduce_sum(labels, -2), 1)
     else:
         labels = x_ts
 
-    code_cost = codes_cost(patients, row_masks, visit_counts, W_c, b_c)
-    y_2d = predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim)
+    code_cost = codes_cost(patients, row_masks,
+                           visit_counts, W_c, b_c)
+    y_2d = predictions(x_ts, W_c, demo, W_v, W_s,
+                       b_c, b_v, b_s, demo_dim)
     visit_cost = visits_cost(labels, y_2d, visit_counts, args)
 
     cost = tf.add(code_cost, visit_cost)
@@ -482,16 +515,24 @@ if __name__ == '__main__':
 
         sess.run(init)
 
-        for ep in list(range(args.n_epochs)):
-            sess.run(optimizer,
-                     feed_dict={filenames: training_files}
-                     )
-
-            if ep % 5 == 0:
-                print("Training cost epoch {}:\n\t".format(ep))
-                print(sess.run(cost),
-                      feed_dict={filenames: training_files})
-            if ep % 20 == 0:
-                print("Validation Loss:\n\t")
-                print(sess.run(cost),
-                      feed_dict={filenames: validation_files})
+        for ep in range(args.n_epochs):
+            val_cost = 0
+            count = 0
+            sess.run(iterator.initializer,
+                     feed_dict={filenames: training_files})
+            try:
+                while True:
+                    sess.run(optimizer)
+            except tf.errors.OutOfRangeError:
+                pass
+            print("Epoch {} Training Cost:\n\t".format(ep), sess.run(cost))
+            # Initialize iterator with validation data
+            sess.run(iterator.initializer,
+                     feed_dict={filenames: validation_files})
+            try:
+                while True:
+                    val_cost += sess.run(cost)
+                    count += 1
+            except tf.errors.OutOfRangeError:
+                pass
+            print("Epoch {} Validation Cost:\n\t".format(ep), val_cost / count)

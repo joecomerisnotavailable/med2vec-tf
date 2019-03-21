@@ -188,7 +188,7 @@ def serialize_lab_dem(patient, label, demo, row_mask, patient_t, args=args):
     """Turn each row of zipped dataset to example protos for writing to TFR."""
     ex = tf.train.SequenceExample()
     # Non-sequential features of the Example
-    ex.context.feature["patient_t"].int64_list.value.append(patient_t)
+    ex.context.feature["patient_t"].float_list.value.append(patient_t)
     ex.context.feature["max_t"].int64_list.value.append(args.max_t)
     ex.context.feature["max_v"].int64_list.value.append(args.max_v)
     ex.context.feature["demo_dim"].int64_list.value.append(args.demo_dim)
@@ -293,7 +293,6 @@ def tf_serialize(patient, row_mask, patient_t):
 if __name__ == '__main__':
     sess = tf.Session()
     seqs, labs, demo, args_dict['demo_dim'] = load_data()
-    print(args.demo_dim)
     print("Labs is none:", labs is None, "Demo is none:", demo is None)
     data = []
 
