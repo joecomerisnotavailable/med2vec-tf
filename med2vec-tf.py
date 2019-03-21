@@ -67,6 +67,7 @@ def parse_lab_dem(example_proto, args=args):
         "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_v": tf.FixedLenFeature([], dtype=tf.int64),
+        "demo_dim": tf.FixedLenFeature([], dtype=tf.int64)
     }
     seq_fts = {
         "patient": tf.FixedLenSequenceFeature([], dtype=tf.int64),
@@ -80,10 +81,12 @@ def parse_lab_dem(example_proto, args=args):
         sequence_features=seq_fts
     )
     output_shape = [ctxt_parsed['max_t'], ctxt_parsed['max_v']]
+    demo_shape = [ctxt_parsed['max_t'], ctxt_parsed['demo_dim']]
     output_shape = tf.stack(output_shape)
+    demo_shape = tf.stack(demo_shape)
     patient = tf.reshape(seq_parsed['patient'], output_shape)
     label = tf.reshape(seq_parsed['label'], output_shape)
-    demo = tf.reshape(seq_parsed['demo'], output_shape)
+    demo = tf.reshape(seq_parsed['demo'], demo_shape)
     row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
     patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
     return {'patient': patient, 'label': label, 'demo': demo,
@@ -95,7 +98,7 @@ def parse_lab(example_proto, args=args):
     ctxt_fts = {
         "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_t": tf.FixedLenFeature([], dtype=tf.int64),
-        "max_v": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_v": tf.FixedLenFeature([], dtype=tf.int64)
     }
     seq_fts = {
         "patient": tf.FixedLenSequenceFeature([], dtype=tf.int64),
@@ -123,6 +126,7 @@ def parse_dem(example_proto, args=args):
         "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_v": tf.FixedLenFeature([], dtype=tf.int64),
+        "demo_dim": tf.FixedLenFeature([], dtype=tf.int64)
     }
     seq_fts = {
         "patient": tf.FixedLenSequenceFeature([], dtype=tf.int64),
@@ -135,9 +139,11 @@ def parse_dem(example_proto, args=args):
         sequence_features=seq_fts
     )
     output_shape = [ctxt_parsed['max_t'], ctxt_parsed['max_v']]
+    demo_shape = [ctxt_parsed['max_t'], ctxt_parsed['demo_dim']]
     output_shape = tf.stack(output_shape)
+    demo_shape = tf.stack(demo_shape)
     patient = tf.reshape(seq_parsed['patient'], output_shape)
-    demo = tf.reshape(seq_parsed['demo'], output_shape)
+    demo = tf.reshape(seq_parsed['demo'], demo_shape)
     row_mask = tf.reshape(seq_parsed['row_mask'], output_shape)
     patient_t = tf.reshape(ctxt_parsed['patient_t'], [1, 1])
     return {'patient': patient, 'demo': demo,
@@ -149,7 +155,7 @@ def parse(example_proto, args=args):
     ctxt_fts = {
         "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_t": tf.FixedLenFeature([], dtype=tf.int64),
-        "max_v": tf.FixedLenFeature([], dtype=tf.int64),
+        "max_v": tf.FixedLenFeature([], dtype=tf.int64)
     }
     seq_fts = {
         "patient": tf.FixedLenSequenceFeature([], dtype=tf.int64),
@@ -401,8 +407,7 @@ def create_vars(demo_dim, args=args):
                       shape=[args.visit_emb_dim, args.code_emb_dim + demo_dim],
                       mean=0.0,
                       stddev=1.0,
-                      dtype=tf.float32
-                                          )
+                      dtype=tf.float32)
                       )
     W_s = tf.Variable(tf.truncated_normal([args.n_labels, args.visit_emb_dim],
                       mean=0.0,
@@ -419,20 +424,43 @@ def create_vars(demo_dim, args=args):
 
 if __name__ == '__main__':
     parse_function = choose_parse_function()
-    _, _, filenames = os.walk(args.data_dir)
-    training_files, holdout = train_test_split(filenames, 0.25)
-    validation_files, test_files = train_test_split(holdout, 0.4)
+    filenames = os.listdir('./' + args.data_dir)
+    training_files, holdout = train_test_split(filenames, test_size=0.25)
+    validation_files, test_files = train_test_split(holdout, test_size=0.4)
 
-    data
+    filenames = tf.placeholder(tf.string, shape=[None])
+
+    data = tf.data.TFRecordDataset(filenames)
+    data = data.map(parse_function)
+    data = data.repeat()
+    data = data.batch(2)
+    iterator = data.make_initializable_iterator()
+
+    batch = iterator.get_next()
+
+    patients = batch['patient']
+    patients = tf.one_hot(patients, args.n_codes)
+    if args.labels:
+        print("######### LABEL IN ARGS")
+        labels = batch['label']
+        labels = tf.one_hot(labels, args.n_labels)
+    else:
+        labels = patients
+    if args.demo:
+        demo = batch['demo']
+        print(demo.shape.as_list())
+        demo_dim = demo.shape.as_list()[-1]
+    else:
+        demo = None
+        demo_dim = 0
+    row_masks = batch['row_mask']
+    patients_ts = batch['patient_t']
 
     W_c, W_v, W_s, b_c, b_v, b_s = create_vars(demo_dim)
-
-    patients, row_masks, visit_counts = tensorize_seqs(seqs)
 
     x_ts = tf.reduce_sum(patients, -2)
 
     if args.labels_file is not None:
-        labels, _, _ = tensorize_seqs(labs, true_seqs=False)
         # The call to tf.minimum is because labels may not be unique in
         # visits like ICDs/medical codes are. For example, if labels are
         # based on CSS groupings.
@@ -450,14 +478,20 @@ if __name__ == '__main__':
 
     init = tf.global_variables_initializer()
 
-
     with tf.Session() as sess:
 
         sess.run(init)
 
         for ep in list(range(args.n_epochs)):
-            sess.run(optimizer)
+            sess.run(optimizer,
+                     feed_dict={filenames: training_files}
+                     )
 
             if ep % 5 == 0:
-
-                print(cost.eval())
+                print("Training cost epoch {}:\n\t".format(ep))
+                print(sess.run(cost),
+                      feed_dict={filenames: training_files})
+            if ep % 20 == 0:
+                print("Validation Loss:\n\t")
+                print(sess.run(cost),
+                      feed_dict={filenames: validation_files})

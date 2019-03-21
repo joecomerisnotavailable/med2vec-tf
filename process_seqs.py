@@ -58,6 +58,7 @@ parser.add_argument('--out_file', type=str,
 parser.add_argument('--n_patients', type=int,
                     help='Batch size.')
 args = parser.parse_args()
+args_dict = vars(args)
 
 
 def load_data(args=args):
@@ -190,6 +191,7 @@ def serialize_lab_dem(patient, label, demo, row_mask, patient_t, args=args):
     ex.context.feature["patient_t"].int64_list.value.append(patient_t)
     ex.context.feature["max_t"].int64_list.value.append(args.max_t)
     ex.context.feature["max_v"].int64_list.value.append(args.max_v)
+    ex.context.feature["demo_dim"].int64_list.value.append(args.demo_dim)
     # Feature lists for the "sequential" features of the Example
     fl_patients = ex.feature_lists.feature_list["patient"]
     fl_labels = ex.feature_lists.feature_list["label"]
@@ -228,6 +230,7 @@ def serialize_dem(patient, demo, row_mask, patient_t, args=args):
     ex.context.feature["patient_t"].int64_list.value.append(patient_t)
     ex.context.feature["max_t"].int64_list.value.append(args.max_t)
     ex.context.feature["max_v"].int64_list.value.append(args.max_v)
+    ex.context.feature["demo_dim"].int64_list.value.append(args.demo_dim)
     # Feature lists for the "sequential" features of the Example
     fl_patients = ex.feature_lists.feature_list["patient"]
     fl_labels = ex.feature_lists.feature_list["demo"]
@@ -289,7 +292,8 @@ def tf_serialize(patient, row_mask, patient_t):
 
 if __name__ == '__main__':
     sess = tf.Session()
-    seqs, labs, demo, demo_dim = load_data()
+    seqs, labs, demo, args_dict['demo_dim'] = load_data()
+    print(args.demo_dim)
     print("Labs is none:", labs is None, "Demo is none:", demo is None)
     data = []
 
