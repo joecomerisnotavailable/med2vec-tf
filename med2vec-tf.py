@@ -224,103 +224,105 @@ def col_masks(patients, args=args):
 
 def codes_cost(patients, row_masks, visit_counts, W_c, b_c, args=args):
     """Calculate the cost for the code embeddings."""
-    visit_counts = tf.cast(visit_counts, tf.float32, name="cc_visit_counts")
-    W_c_prime = tf.nn.relu(W_c, name="w_c_prime")
+    with tf.name_scope("Codes_Cost"):
+        visit_counts = tf.cast(visit_counts, tf.float32, name="cc_visit_counts")
+        W_c_prime = tf.nn.relu(W_c, name="w_c_prime")
 
-    # tf.matmul doesn't broadcast, and we need to keep these grouped by
-    # visit, so we need to tile W_c to one copy for every (real or
-    # dummy) visit.
-    W_c_tiled = tf.expand_dims(W_c_prime, 0, name="w_c_tiled")
-    W_c_tiled = tf.expand_dims(W_c_tiled, 0, name="w_c_tiled")
-    W_c_tiled = tf.tile(W_c_tiled, [2, args.max_t, 1, 1], name="w_c_tiled")
+        # tf.matmul doesn't broadcast, and we need to keep these grouped by
+        # visit, so we need to tile W_c to one copy for every (real or
+        # dummy) visit.
+        W_c_tiled = tf.expand_dims(W_c_prime, 0, name="w_c_tiled")
+        W_c_tiled = tf.expand_dims(W_c_tiled, 0, name="w_c_tiled")
+        W_c_tiled = tf.tile(W_c_tiled, [2, args.max_t, 1, 1], name="w_c_tiled")
 
-    # w_ij is a n_patients X max_t array of code_emb_dim X max_v
-    # matrices whose columns are the representations of the codes
-    # appearing in each visit in seqs
-    w_ij = tf.matmul(W_c_tiled, patients, transpose_b=True, name="w_ij")
+        # w_ij is a n_patients X max_t array of code_emb_dim X max_v
+        # matrices whose columns are the representations of the codes
+        # appearing in each visit in seqs
+        w_ij = tf.matmul(W_c_tiled, patients, transpose_b=True, name="w_ij")
 
-    # We want a patients X visits X max_v array of code_emb_dim X 1
-    # vectors which are the columns from w_ij.
-    w_ij = tf.transpose(w_ij, [0, 1, 3, 2], name="w_ij")
+        # We want a patients X visits X max_v array of code_emb_dim X 1
+        # vectors which are the columns from w_ij.
+        w_ij = tf.transpose(w_ij, [0, 1, 3, 2], name="w_ij")
 
-    w_ij_shape = [args.n_patients,
-                  args.max_t,
-                  args.max_v,
-                  args.code_emb_dim,
-                  1]
-    w_ij = tf.reshape(w_ij, w_ij_shape, name="w_ij")
+        w_ij_shape = [args.n_patients,
+                      args.max_t,
+                      args.max_v,
+                      args.code_emb_dim,
+                      1]
+        w_ij = tf.reshape(w_ij, w_ij_shape, name="w_ij")
 
-    # tf.multiply will broadcast these columns to each column of W_c in
-    # each tile of W_c_tiled
-    pre_sum = tf.multiply(W_c_prime, w_ij, name="cc_pre_sum")
-    logits = tf.reduce_sum(pre_sum, -2, name="cc_logits")
+        # tf.multiply will broadcast these columns to each column of W_c in
+        # each tile of W_c_tiled
+        pre_sum = tf.multiply(W_c_prime, w_ij, name="cc_pre_sum")
+        logits = tf.reduce_sum(pre_sum, -2, name="cc_logits")
 
-    # Logits now has a n_patients X max_t array of max_v X n_codes
-    # vectors whose i, jth element is the dot product of the code
-    # embedding of code i (which appears in visit t) with code j
-    # (which may or may not)
+        # Logits now has a n_patients X max_t array of max_v X n_codes
+        # vectors whose i, jth element is the dot product of the code
+        # embedding of code i (which appears in visit t) with code j
+        # (which may or may not)
 
-    # The probability of code j given that code i is in the same visit
-    p_j_i = tf.nn.softmax(logits, -1, name="cc_p_j_i")
+        # The probability of code j given that code i is in the same visit
+        p_j_i = tf.nn.softmax(logits, -1, name="cc_p_j_i")
 
-    log_p_j_i = tf.log(p_j_i + args.log_eps, name="cc_log_p_j_i")
+        log_p_j_i = tf.log(p_j_i + args.log_eps, name="cc_log_p_j_i")
 
-    # Create mask, but don't use it yet. See docstring for col_masks
-    col_mask = col_masks(patients, args)
+        # Create mask, but don't use it yet. See docstring for col_masks
+        col_mask = col_masks(patients, args)
 
-    # non_norm because we haven't divided by the number of real visits
-    # for each patient yet.
-    non_norm_summands = tf.multiply(log_p_j_i, col_mask,
-                                    name="cc_non_norm_summands")
+        # non_norm because we haven't divided by the number of real visits
+        # for each patient yet.
+        non_norm_summands = tf.multiply(log_p_j_i, col_mask,
+                                        name="cc_non_norm_summands")
 
-    # Now for each patient divide by number of real visits of that
-    # patient.
-    # Mask rows corresponding to NA ICDs and p_i_i's afterward to ensure
-    # patient-by-patient division.
-    visit_counts = tf.expand_dims(visit_counts, -1, name="cc_visit_counts")
-    summands_w_dummies = non_norm_summands / visit_counts
-    summands = tf.boolean_mask(summands_w_dummies, row_masks, name="summands")
-    codes_cost_per_visit = tf.reduce_sum(summands, -1, name="codes_cost_per_visit")
+        # Now for each patient divide by number of real visits of that
+        # patient.
+        # Mask rows corresponding to NA ICDs and p_i_i's afterward to ensure
+        # patient-by-patient division.
+        visit_counts = tf.expand_dims(visit_counts, -1, name="cc_visit_counts")
+        summands_w_dummies = non_norm_summands / visit_counts
+        summands = tf.boolean_mask(summands_w_dummies, row_masks, name="summands")
+        codes_cost_per_visit = tf.reduce_sum(summands, -1, name="codes_cost_per_visit")
 
-    # Final cost is the batch average per patient of each patient's
-    # average per visit cost
-    codes_cost = tf.reduce_mean(codes_cost_per_visit, name="codes_cost")
-    return codes_cost
+        # Final cost is the batch average per patient of each patient's
+        # average per visit cost
+        codes_cost = tf.reduce_mean(codes_cost_per_visit, name="codes_cost")
+        return codes_cost
 
 
 def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
     """Get hat{y}_t."""
 
-    # We don't need to group by visit in this branch. We also don't need
-    # to buffer patients with dummy visits.
-    x_2d = tf.reshape(x_ts, [-1, args.n_codes], name="pred_x2d")
-    dummy_visit_mask = tf.minimum(tf.reduce_sum(x_2d, -1), 1, name="pred_dummy_vm")
-    dummy_visit_mask = tf.reshape(dummy_visit_mask, [-1,], name="pred_dummy_vm")
+    with tf.name_scope("Make_Predictions"):
+        # We don't need to group by visit in this branch. We also don't need
+        # to buffer patients with dummy visits.
+        x_2d = tf.reshape(x_ts, [-1, args.n_codes], name="pred_x2d")
+        dummy_visit_mask = tf.minimum(tf.reduce_sum(x_2d, -1), 1, name="pred_dummy_vm")
+        dummy_visit_mask = tf.reshape(dummy_visit_mask, [-1,], name="pred_dummy_vm")
 
-    if D_t is not None:
-        d_2d = tf.reshape(D_t, [-1, demo_dim], name="pred_d_2d")
+        if D_t is not None:
+            d_2d = tf.reshape(D_t, [-1, demo_dim], name="pred_d_2d")
 
-    u_ts = tf.matmul(W_c, x_2d, transpose_b=True, name="pred_u_ts")
-    u_ts = tf.add(u_ts, b_c, name="pred_u_ts")
-    u_ts = tf.transpose(u_ts, name="pred_u_ts")
+        u_ts = tf.matmul(W_c, x_2d, transpose_b=True, name="pred_u_ts")
+        u_ts = tf.add(u_ts, b_c, name="pred_u_ts")
+        u_ts = tf.transpose(u_ts, name="pred_u_ts")
 
-    # In order to store D_t as a tensor it will need to have
-    # dummy visits just like x_ts does. This also ensures that
-    # everything aligns correctly when we concatenate, here.
-    # But after concatenating, we can ditch the dummy visits.
-    full_vec = tf.concat([u_ts, d_2d], axis=-1, name="pred_full_vec")
-    full_vec = tf.boolean_mask(full_vec, dummy_visit_mask, name="pred_full_vec")
+        # In order to store D_t as a tensor it will need to have
+        # dummy visits just like x_ts does. This also ensures that
+        # everything aligns correctly when we concatenate, here.
+        # But after concatenating, we can ditch the dummy visits.
+        full_vec = tf.concat([u_ts, d_2d], axis=-1, name="pred_full_vec")
+        full_vec = tf.boolean_mask(full_vec, dummy_visit_mask, name="pred_full_vec")
 
-    v_t = tf.matmul(W_v, full_vec, transpose_b=True, name="pred_vt")
-    v_t = tf.add(v_t, b_v, name="pred_vt")
-    v_t = tf.transpose(v_t, name="pred_vt")
+        v_t = tf.matmul(W_v, full_vec, transpose_b=True, name="pred_vt")
+        v_t = tf.add(v_t, b_v, name="pred_vt")
+        v_t = tf.transpose(v_t, name="pred_vt")
 
-    pre_soft = tf.matmul(W_s, v_t, transpose_b=True, name="pred_pre_soft")
-    pre_soft = tf.add(pre_soft, b_s, name="pred_pre_soft")
-    pre_soft = tf.transpose(pre_soft, name="pred_pre_soft")
+        pre_soft = tf.matmul(W_s, v_t, transpose_b=True, name="pred_pre_soft")
+        pre_soft = tf.add(pre_soft, b_s, name="pred_pre_soft")
+        pre_soft = tf.transpose(pre_soft, name="pred_pre_soft")
 
-    y_2d = tf.nn.softmax(pre_soft, axis=-1, name="pred_y_2d")
-    return y_2d
+        y_2d = tf.nn.softmax(pre_soft, axis=-1, name="pred_y_2d")
+        return y_2d
 
 
 def visits_cost(labels, y_2d, visit_counts, args):
@@ -332,112 +334,114 @@ def visits_cost(labels, y_2d, visit_counts, args):
 
     outputs: The scalar visits prediction cost.
     """
-    visit_counts = tf.cast(visit_counts, tf.float32, name="vc_visit_counts")
-    # We'll add the x vectors within the window before taking the dot
-    # product with \hat{y}_t. To do this, we need to use a sliding
-    # window, and to make sure patients' sums don't gather terms
-    # from other patients, we need to pad each patient
-    x_pad = tf.pad(labels, [[0, 0], [args.win, args.win], [0, 0]], name="x_pad")
+    with tf.name_scope("Visits_Cost"):
+        visit_counts = tf.cast(visit_counts, tf.float32, name="vc_visit_counts")
+        # We'll add the x vectors within the window before taking the dot
+        # product with \hat{y}_t. To do this, we need to use a sliding
+        # window, and to make sure patients' sums don't gather terms
+        # from other patients, we need to pad each patient
+        x_pad = tf.pad(labels, [[0, 0], [args.win, args.win], [0, 0]], name="x_pad")
 
-    # Because different \hat{y}_t have different numbers of
-    # neighboring x_t in their window, we can't really avoid passing
-    # 1-x_ts through the same loop as x_ts by subtracting final_x_totals
-    # from 2*win / visit_counts, say
-    z_pad = tf.subtract(1., x_pad, name="vc_z_pad")
+        # Because different \hat{y}_t have different numbers of
+        # neighboring x_t in their window, we can't really avoid passing
+        # 1-x_ts through the same loop as x_ts by subtracting final_x_totals
+        # from 2*win / visit_counts, say
+        z_pad = tf.subtract(1., x_pad, name="vc_z_pad")
 
-    # Note that this is a different mask than the one produced in predictions.
-    visit_mask = tf.minimum(tf.reduce_sum(x_pad, -1), 1, name="vc_visit_mask")
-    visit_mask = tf.reshape(visit_mask, [-1,], name="vc_visit_mask")
+        # Note that this is a different mask than the one produced in predictions.
+        visit_mask = tf.minimum(tf.reduce_sum(x_pad, -1), 1, name="vc_visit_mask")
+        visit_mask = tf.reshape(visit_mask, [-1,], name="vc_visit_mask")
 
-    # We need to flatten x_pad to do the window function, so divide each x
-    # by the number of visits of that patient *first*.
-    normed_x_pad = x_pad / tf.reshape(visit_counts, [args.n_patients, 1, 1])
-    normed_z_pad = z_pad / tf.reshape(visit_counts, [args.n_patients, 1, 1])
+        # We need to flatten x_pad to do the window function, so divide each x
+        # by the number of visits of that patient *first*.
+        normed_x_pad = x_pad / tf.reshape(visit_counts, [args.n_patients, 1, 1])
+        normed_z_pad = z_pad / tf.reshape(visit_counts, [args.n_patients, 1, 1])
 
-    normed_x_pad_2d = tf.reshape(normed_x_pad, [-1, args.n_labels], name="vc_normed_x_pad_2d")
-    normed_z_pad_2d = tf.reshape(normed_z_pad, [-1, args.n_labels], name="vc_normed_x_pad_2d")
+        normed_x_pad_2d = tf.reshape(normed_x_pad, [-1, args.n_labels], name="vc_normed_x_pad_2d")
+        normed_z_pad_2d = tf.reshape(normed_z_pad, [-1, args.n_labels], name="vc_normed_x_pad_2d")
 
-    # Before we padded around each patient. Now pad around the entire
-    # list of visits
-    x_double_pad = tf.pad(normed_x_pad_2d, [[args.win, args.win], [0, 0]], name="x_double_pad")
-    z_double_pad = tf.pad(normed_z_pad_2d, [[args.win, args.win], [0, 0]], name="z_double_pad")
+        # Before we padded around each patient. Now pad around the entire
+        # list of visits
+        x_double_pad = tf.pad(normed_x_pad_2d, [[args.win, args.win], [0, 0]], name="x_double_pad")
+        z_double_pad = tf.pad(normed_z_pad_2d, [[args.win, args.win], [0, 0]], name="z_double_pad")
 
-    slice_height = args.n_patients * (args.max_t + args.win * 2)
-    slice_shape = [slice_height, args.n_labels]
+        slice_height = args.n_patients * (args.max_t + args.win * 2)
+        slice_shape = [slice_height, args.n_labels]
 
-    def loop_ops(win_start, totalx, totalz):
-        """Slide window function.
+        def loop_ops(win_start, totalx, totalz):
+            """Slide window function.
 
-        Add x_ts from surrounding visits together before
-        taking the dot product with log(hat{y}).
+            Add x_ts from surrounding visits together before
+            taking the dot product with log(hat{y}).
 
-        For passing to tf.while_loop
-        """
-        tail_length = 2 * args.win - win_start
-        parts = tf.concat([tf.zeros(win_start, dtype=tf.int32),
-                           tf.ones(slice_height, dtype=tf.int32),
-                           tf.zeros(tail_length, dtype=tf.int32)], -1)
-        summandx = tf.dynamic_partition(x_double_pad, num_partitions=2,
-                                        partitions=parts, name="summandx")[1]
-        summandz = tf.dynamic_partition(z_double_pad, num_partitions=2,
-                                        partitions=parts, name="summandz")[1]
-        return (win_start - 1, tf.add(totalx, summandx),
-                tf.add(totalz, summandz))
+            For passing to tf.while_loop
+            """
+            tail_length = 2 * args.win - win_start
+            parts = tf.concat([tf.zeros(win_start, dtype=tf.int32),
+                               tf.ones(slice_height, dtype=tf.int32),
+                               tf.zeros(tail_length, dtype=tf.int32)], -1)
+            summandx = tf.dynamic_partition(x_double_pad, num_partitions=2,
+                                            partitions=parts, name="summandx")[1]
+            summandz = tf.dynamic_partition(z_double_pad, num_partitions=2,
+                                            partitions=parts, name="summandz")[1]
+            return (win_start - 1, tf.add(totalx, summandx),
+                    tf.add(totalz, summandz))
 
-    win_start = 2 * args.win
+        win_start = 2 * args.win
 
-    totalx = tf.zeros(slice_shape, dtype=tf.float32, name="totalx")
-    totalz = tf.zeros(slice_shape, dtype=tf.float32, name="totalz")
-    loop_cond = lambda win_start, totalx, totalz: tf.less(-1, win_start)
-    loop_fn = lambda win_start, totalx, totalz: loop_ops(win_start, totalx, totalz)
-    _, window_x_total, window_z_total = tf.while_loop(loop_cond,
-                                                      loop_ops,
-                                                      (win_start,
-                                                       totalx,
-                                                       totalz), name="while_loop")
+        totalx = tf.zeros(slice_shape, dtype=tf.float32, name="totalx")
+        totalz = tf.zeros(slice_shape, dtype=tf.float32, name="totalz")
+        loop_cond = lambda win_start, totalx, totalz: tf.less(-1, win_start)
+        loop_fn = lambda win_start, totalx, totalz: loop_ops(win_start, totalx, totalz)
+        _, window_x_total, window_z_total = tf.while_loop(loop_cond,
+                                                          loop_ops,
+                                                          (win_start,
+                                                           totalx,
+                                                           totalz), name="while_loop")
 
-    # Subtract out x_{t+0}
-    correct_x_totals_pad = tf.subtract(window_x_total, normed_x_pad_2d, name="correct_x_totals_pad")
-    correct_z_totals_pad = tf.subtract(window_z_total, normed_z_pad_2d, name="correct_z_totals_pad")
+        # Subtract out x_{t+0}
+        correct_x_totals_pad = tf.subtract(window_x_total, normed_x_pad_2d, name="correct_x_totals_pad")
+        correct_z_totals_pad = tf.subtract(window_z_total, normed_z_pad_2d, name="correct_z_totals_pad")
 
-    final_x_total = tf.boolean_mask(correct_x_totals_pad, visit_mask, name="final_x_cost")
-    final_z_total = tf.boolean_mask(correct_z_totals_pad, visit_mask, name="final_z_cost")
+        final_x_total = tf.boolean_mask(correct_x_totals_pad, visit_mask, name="final_x_cost")
+        final_z_total = tf.boolean_mask(correct_z_totals_pad, visit_mask, name="final_z_cost")
 
-    summandsx = tf.multiply(final_x_total, tf.log(y_2d + args.log_eps), name="summandsx")
-    summandsz = tf.multiply(final_z_total, tf.log(1. - y_2d + args.log_eps), name="summandsz")
+        summandsx = tf.multiply(final_x_total, tf.log(y_2d + args.log_eps), name="summandsx")
+        summandsz = tf.multiply(final_z_total, tf.log(1. - y_2d + args.log_eps), name="summandsz")
 
-    sumx = tf.reduce_sum(summandsx, name="sumx")
-    sumz = tf.reduce_sum(summandsz, name="sumz")
+        sumx = tf.reduce_sum(summandsx, name="sumx")
+        sumz = tf.reduce_sum(summandsz, name="sumz")
 
-    visits_cost = tf.subtract(sumz, sumx, name="visits_cost")
-    return visits_cost
+        visits_cost = tf.subtract(sumz, sumx, name="visits_cost")
+        return visits_cost
 
 
 def create_vars(demo_dim, args=args):
     """Define weight matrices and biases."""
-    W_c = tf.Variable(tf.truncated_normal([args.code_emb_dim, args.n_codes],
-                      mean=0.0,
-                      stddev=1.0,
-                      dtype=tf.float32
-                                          ),
-                      name="W_c")
-    W_v = tf.Variable(tf.truncated_normal(
-                      shape=[args.visit_emb_dim, args.code_emb_dim + demo_dim],
-                      mean=0.0,
-                      stddev=1.0,
-                      dtype=tf.float32),
-                      name="W_v")
-    W_s = tf.Variable(tf.truncated_normal([args.n_labels, args.visit_emb_dim],
-                      mean=0.0,
-                      stddev=1.0,
-                      dtype=tf.float32
-                                          ),
-                      name="W_s")
+    with tf.variable_scope("Embeddings"):
+        W_c = tf.Variable(tf.truncated_normal([args.code_emb_dim, args.n_codes],
+                          mean=0.0,
+                          stddev=1.0,
+                          dtype=tf.float32
+                                              ),
+                          name="W_c")
+        W_v = tf.Variable(tf.truncated_normal(
+                          shape=[args.visit_emb_dim, args.code_emb_dim + demo_dim],
+                          mean=0.0,
+                          stddev=1.0,
+                          dtype=tf.float32),
+                          name="W_v")
+        W_s = tf.Variable(tf.truncated_normal([args.n_labels, args.visit_emb_dim],
+                          mean=0.0,
+                          stddev=1.0,
+                          dtype=tf.float32
+                                              ),
+                          name="W_s")
 
-    b_c = tf.Variable(tf.zeros([W_c.shape[0], 1], dtype=tf.float32), name="b_c")
-    b_v = tf.Variable(tf.zeros([W_v.shape[0], 1], dtype=tf.float32), name="b_v")
-    b_s = tf.Variable(tf.zeros([W_s.shape[0], 1], dtype=tf.float32), name="b_s")
-    return W_c, W_v, W_s, b_c, b_v, b_s
+        b_c = tf.Variable(tf.zeros([W_c.shape[0], 1], dtype=tf.float32), name="b_c")
+        b_v = tf.Variable(tf.zeros([W_v.shape[0], 1], dtype=tf.float32), name="b_v")
+        b_s = tf.Variable(tf.zeros([W_s.shape[0], 1], dtype=tf.float32), name="b_s")
+        return W_c, W_v, W_s, b_c, b_v, b_s
 
 
 def get_demo_dim(filelist, parse_function, args=args):
@@ -510,6 +514,14 @@ if __name__ == '__main__':
     visit_cost = visits_cost(labels, y_2d, visit_counts, args)
 
     cost = tf.add(code_cost, visit_cost, name="cost")
+    with tf.name_scope("Summaries"):
+        training_code_cost = tf.summary.scalar("Train_code_cost", code_cost)
+        training_visit_cost = tf.summary.scalar("Train_visit_cost", visit_cost)
+        training_cost = tf.summary.scalar("Train_cost", cost)
+
+        val_code_cost = tf.summary.scalar("Validation_code_cost", code_cost)
+        val_visit_cost = tf.summary.scalar("Validation_visit_cost", visit_cost)
+        val_cost = tf.summary.scalar("Validation_cost", cost)
 
     optimizer = tf.train.AdamOptimizer(name="optimizer").minimize(cost)
 
@@ -527,7 +539,7 @@ if __name__ == '__main__':
         sess.run(init)
 
         for ep in range(args.n_epochs):
-            val_cost = 0
+            avg_val_cost = 0
             count = 0
             sess.run(iterator.initializer,
                      feed_dict={filenames: training_files})
@@ -538,16 +550,41 @@ if __name__ == '__main__':
                 pass
             sess.run(iterator.initializer,
                      feed_dict={filenames: training_files})
+            cc_summ, vc_summ, cost_summ = sess.run([training_code_cost,
+                                                    training_visit_cost,
+                                                    training_cost])
+
             print("Epoch {} Training Cost:\n\t".format(ep), sess.run(cost))
+            writer.add_summary(cc_summ, ep)
+            writer.add_summary(vc_summ, ep)
+            writer.add_summary(cost_summ, ep)
+
             # Initialize iterator with validation data
             sess.run(iterator.initializer,
                      feed_dict={filenames: validation_files})
+            cc_summ, vc_summ, cost_summ = sess.run([val_code_cost,
+                                                    val_visit_cost,
+                                                    val_cost])
+            print("Epoch {} Training Cost:\n\t".format(ep), sess.run(cost))
+            writer.add_summary(cc_summ, ep)
+            writer.add_summary(vc_summ, ep)
+            writer.add_summary(cost_summ, ep)
             try:
                 while True:
-                    val_cost += sess.run(cost)
+                    avg_val_cost += sess.run(cost)
                     count += 1
             except tf.errors.OutOfRangeError:
                 pass
-            print("Epoch {} Validation Cost:\n\t".format(ep), val_cost / count)
-        print("Embedding:\n\t", sess.run(W_c))
+
+            print("Epoch {} Validation Cost:\n\t".format(ep),
+                  avg_val_cost / count)
+        embedding_dict = {"W_c": sess.run(W_c),
+                          "W_v": sess.run(W_v),
+                          "W_s": sess.run(W_s),
+                          "b_c": sess.run(b_c),
+                          "b_v": sess.run(b_v),
+                          "b_s": sess.run(b_s)}
+        emb_path = os.path.join(args.root_dir + args.data_dir, "embeddings")
+        with open(emb_path, 'wb') as emb_file:
+            pickle.dump(embedding_dict, emb_file)
         save_path = saver.save(sess, './saved_model')
