@@ -59,6 +59,8 @@ parser.add_argument('--demo', action='store_true',
                     ' demographic data.')
 parser.add_argument('--labels', action='store_true',
                     help='Include this tag if TFRecords include labels.')
+parser.add_argument('--log_dir', type=str, help='Directory in which to '
+                    'store log data. default="logs"', default="logs")
 
 args = parser.parse_args()
 args_dict = vars(args)
@@ -99,7 +101,7 @@ def parse_lab_dem(example_proto, args=args):
 def parse_lab(example_proto, args=args):
     """Prepare TFRecords for training."""
     ctxt_fts = {
-        "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "patient_t": tf.FixedLenFeature([], dtype=tf.float32),
         "max_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_v": tf.FixedLenFeature([], dtype=tf.int64)
     }
@@ -126,7 +128,7 @@ def parse_lab(example_proto, args=args):
 def parse_dem(example_proto, args=args):
     """Prepare TFRecords for training."""
     ctxt_fts = {
-        "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "patient_t": tf.FixedLenFeature([], dtype=tf.float32),
         "max_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_v": tf.FixedLenFeature([], dtype=tf.int64),
         "demo_dim": tf.FixedLenFeature([], dtype=tf.int64)
@@ -156,7 +158,7 @@ def parse_dem(example_proto, args=args):
 def parse(example_proto, args=args):
     """Prepare TFRecords for training."""
     ctxt_fts = {
-        "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "patient_t": tf.FixedLenFeature([], dtype=tf.float32),
         "max_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_v": tf.FixedLenFeature([], dtype=tf.int64)
     }
@@ -467,7 +469,6 @@ if __name__ == '__main__':
     data = tf.data.TFRecordDataset(filenames)
     data = data.map(parse_function)
 
-    data = data.repeat()
     data = data.batch(args.n_patients)
     iterator = data.make_initializable_iterator()
 
@@ -514,7 +515,14 @@ if __name__ == '__main__':
 
     init = tf.global_variables_initializer()
 
+    saver = tf.train.Saver({'W_c': W_c, 'W_v': W_v, 'W_s': W_s,
+                            'b_c': b_c, 'b_v': b_v, 'b_s': b_s})
+
     with tf.Session() as sess:
+        writer = tf.summary.FileWriter(os.path
+                                         .join(args.root_dir, args.log_dir),
+                                       sess.graph)
+
 
         sess.run(init)
 
@@ -528,6 +536,8 @@ if __name__ == '__main__':
                     sess.run(optimizer)
             except tf.errors.OutOfRangeError:
                 pass
+            sess.run(iterator.initializer,
+                     feed_dict={filenames: training_files})
             print("Epoch {} Training Cost:\n\t".format(ep), sess.run(cost))
             # Initialize iterator with validation data
             sess.run(iterator.initializer,
@@ -539,3 +549,5 @@ if __name__ == '__main__':
             except tf.errors.OutOfRangeError:
                 pass
             print("Epoch {} Validation Cost:\n\t".format(ep), val_cost / count)
+        print("Embedding:\n\t", sess.run(W_c))
+        save_path = saver.save(sess, './saved_model')
