@@ -67,7 +67,7 @@ args_dict = vars(args)
 def parse_lab_dem(example_proto, args=args):
     """Prepare TFRecords for training."""
     ctxt_fts = {
-        "patient_t": tf.FixedLenFeature([], dtype=tf.int64),
+        "patient_t": tf.FixedLenFeature([], dtype=tf.float32),
         "max_t": tf.FixedLenFeature([], dtype=tf.int64),
         "max_v": tf.FixedLenFeature([], dtype=tf.int64),
         "demo_dim": tf.FixedLenFeature([], dtype=tf.int64)
