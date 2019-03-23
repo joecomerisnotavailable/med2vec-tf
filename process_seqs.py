@@ -28,8 +28,6 @@ import tensorflow as tf
 import pickle
 import argparse
 
-
-
 parser = argparse.ArgumentParser(description='Convert seqs and labels'
                                  ' files to dense tensors and then into'
                                  ' TFRecord files for efficient batching'
@@ -63,7 +61,7 @@ args_dict = vars(args)
 
 
 def load_data(args=args):
-    """Replace later with dataset stuff."""
+    """Load in list of list data files."""
     seqs_file = args.seqs_file
     seqs = pickle.load(open(seqs_file, 'rb'))
     labs = None
@@ -74,10 +72,8 @@ def load_data(args=args):
     demo_dim = 0
     if args.demo_file is not None:
         demo_file = args.demo_file
-        D_t = pickle.load(open(demo_file, 'rb'))
-        demo_dim = D_t.shape[-1]
-        demo = tf.constant(D_t, dtype=tf.float32)
-        demo = tf.reshape(demo, [args.n_patients, -1])
+        demo = pickle.load(open(demo_file, 'rb'))
+        demo_dim = len(demo[0])
     return seqs, labs, demo, demo_dim
 
 
@@ -117,14 +113,18 @@ def fill_patient(patient, mask_batch, args=args):
           than max_t visits.
     """
     max_t = args.max_t
-    max_v = args.max_v
+
+    # This function gets called on seqs, labs and demo. Since demo_dim
+    # will tend to be different from max_v, use visit_dim to check
+    # length of filler visits.
+    visit_dim = len(patient[0])
     new_patient = []
     new_patient.extend(patient)
     new_mask_batch = mask_batch
     t = len(new_patient)
     deficit = (max_t - t)
-    new_patient.extend([[-2] * max_v] * deficit)
-    new_mask_batch.append([[0] * max_v] * deficit)
+    new_patient.extend([[-2] * visit_dim] * deficit)
+    new_mask_batch.append([[0] * visit_dim] * deficit)
     return new_patient, new_mask_batch, t
 
 
@@ -133,7 +133,7 @@ def tensorize_seqs(seqs, args=args, true_seqs=False):
 
     seqs: list of list. cf  https://github.com/mp2893/med2vec
     true_seqs: bool. Are we tensorizing the true sequences? If false,
-               we are tonsorizing labels.
+               we are tonsorizing labels or demo.
     returns:
         patients: tensor with shape [patients, max_t, max_v]
 
@@ -154,6 +154,7 @@ def tensorize_seqs(seqs, args=args, true_seqs=False):
         patients_ts: numpy array with shape [patients,] containing the
                      number of true visits for each patient.
     """
+    n_seqs = len([x for x in seqs if x == [-1]]) + 1
     patients = []
     new_patient = []
     row_masks = []
@@ -177,8 +178,8 @@ def tensorize_seqs(seqs, args=args, true_seqs=False):
     patients_ts = tf.cast(patients_ts, tf.float32)
     row_masks = tf.not_equal(patients, -2)
     row_masks = tf.cast(row_masks, tf.int32)
-    patients = tf.reshape(patients, [args.n_patients, -1])
-    row_masks = tf.reshape(row_masks, [args.n_patients, -1])
+    patients = tf.reshape(patients, [n_seqs, -1])
+    row_masks = tf.reshape(row_masks, [n_seqs, -1])
     return patients, row_masks, patients_ts
 
 
@@ -198,11 +199,16 @@ def serialize_lab_dem(patient, label, demo, row_mask, patient_t, args=args):
     fl_labels = ex.feature_lists.feature_list["label"]
     fl_demo = ex.feature_lists.feature_list["demo"]
     fl_row_masks = ex.feature_lists.feature_list["row_mask"]
-    for visit, lab, dem, mask in zip(patient, label, demo, row_mask):
+    for visit, lab, mask in zip(patient, label, row_mask):
         fl_patients.feature.add().int64_list.value.append(visit)
         fl_labels.feature.add().int64_list.value.append(lab)
-        fl_demo.feature.add().float_list.value.append(dem)
         fl_row_masks.feature.add().int64_list.value.append(mask)
+    for dem in demo:
+        if dem == -2.:
+            feat = 0
+        else:
+            feat = dem
+        fl_demo.feature.add().float_list.value.append(feat)
     return ex.SerializeToString()
 
 
@@ -234,12 +240,17 @@ def serialize_dem(patient, demo, row_mask, patient_t, args=args):
     ex.context.feature["demo_dim"].int64_list.value.append(args.demo_dim)
     # Feature lists for the "sequential" features of the Example
     fl_patients = ex.feature_lists.feature_list["patient"]
-    fl_labels = ex.feature_lists.feature_list["demo"]
+    fl_demo = ex.feature_lists.feature_list["demo"]
     fl_row_masks = ex.feature_lists.feature_list["row_mask"]
-    for visit, dem, mask in zip(patient, demo, row_mask):
+    for visit, mask in zip(patient, row_mask):
         fl_patients.feature.add().int64_list.value.append(visit)
-        fl_labels.feature.add().float_list.value.append(dem)
         fl_row_masks.feature.add().int64_list.value.append(mask)
+    for dem in demo:
+        if dem == -2.:
+            feat = 0
+        else:
+            feat = dem
+        fl_demo.feature.add().float_list.value.append(feat)
     return ex.SerializeToString()
 
 
@@ -291,42 +302,71 @@ def tf_serialize(patient, row_mask, patient_t):
     return tf.reshape(tf_string, ())
 
 
+def divvy(seqs, args=args):
+    """Separate long seqs file into smaller files for writing to TFR."""
+    batches = []
+    batch = []
+    patients = 1
+    for idx, visit in enumerate(seqs):
+        if visit == [-1]:
+            patients += 1
+        if patients > args.n_patients or idx == len(seqs) - 1:
+            batches.append(batch)
+            batch = []
+            patients = 1
+        else:
+            batch.append(visit)
+    return batches
+
 if __name__ == '__main__':
     sess = tf.Session()
     seqs, labs, demo, args_dict['demo_dim'] = load_data()
-    print("Labs is none:", labs is None, "Demo is none:", demo is None)
-    data = []
+    print("args_dict['demo_dim']:", args_dict['demo_dim'])
+    print("Include Labs:", labs is not None,
+          "\nInclude Demo:", demo is not None)
+    raw_data = []
 
-    patients, row_masks, patients_ts = tensorize_seqs(seqs, true_seqs=True)
-    data.append(patients)
+    seq_batches = divvy(seqs)
+    raw_data.append(seq_batches)
     if labs is not None:
-        print("args.labels_file is not None")
-        labels, _, _ = tensorize_seqs(labs, true_seqs=False)
-        data.append(labels)
+        lab_batches = divvy(labs)
+        raw_data.append(lab_batches)
         if demo is not None:
-            print("################# LAB_DEM")
-            data.append(demo)
+            print("Serialize with labels and demo.")
+            demo_batches = divvy(demo)
+            raw_data.append(demo_batches)
             map_func = tf_serialize_lab_dem
         else:
-            print("################ LAB")
+            print("Serialize with labels.")
             map_func = tf_serialize_lab
     elif demo is not None:
-        print("################# DEM")
-        data.append(demo)
+        print("Serialize with demo.")
+        demo_batches = divvy(demo)
+        raw_data.append(demo_batches)
         map_func = tf_serialize_dem
     else:
-        print("################# NONE")
+        print("Serialize without labels or demo.")
         map_func = tf_serialize
-    data.extend([row_masks, patients_ts])
 
-    output = tf.data.Dataset().from_tensor_slices(tuple(data))
+    batches = zip(*raw_data)
+    for num, batch in enumerate(batches):
+        data = []
+        for idx, source in enumerate(batch):
+            if idx == 0:
+                (tensors,
+                 row_masks,
+                 patients_ts) = tensorize_seqs(source, true_seqs=True)
+            else:
+                tensors, _, _ = tensorize_seqs(source)
+            data.append(tensors)
+        data.extend([row_masks, patients_ts])
 
-    del data
+        output = tf.data.Dataset().from_tensor_slices(tuple(data))
 
-    serialized = output.map(map_func)
+        serialized = output.map(map_func)
 
-    # Deprecated. Use tf.data.experimental.TFRecordWriter(...)
-    writer = tf.contrib.data.TFRecordWriter(args.out_file)
-    writeop = writer.write(serialized)
-    sess.run(writeop)
+        # Deprecated. Use tf.data.experimental.TFRecordWriter(...)
+        writer = tf.contrib.data.TFRecordWriter(args.out_file + str(num))
+        writeop = writer.write(serialized)
+        sess.run(writeop)
     print("Done.")

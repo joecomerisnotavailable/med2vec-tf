@@ -41,7 +41,8 @@ parser.add_argument('--code_emb_dim', type=int,
 parser.add_argument('--visit_emb_dim', type=int,
                     help='The size of the visit embedding dimension.')
 parser.add_argument('--log_eps', type=float,
-                    help='Hyperparameter. To avoid taking log of zero.')
+                    help='Hyperparameter. To avoid taking log of zero.'
+                    'defaule=1e-6', default=1e-6)
 parser.add_argument('--win', type=int,
                     help='Half the number of surrounding visits to'
                     ' include in the calculation of the visit cost.'
@@ -492,7 +493,6 @@ if __name__ == '__main__':
         patients = batch['patient']
         patients = tf.one_hot(patients, args.n_codes, name="one_hot_patients")
         if args.labels:
-            print("######### LABEL IN ARGS")
             labels = batch['label']
             labels = tf.one_hot(labels, args.n_labels, name="one_hot_labels")
         else:
