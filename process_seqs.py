@@ -29,6 +29,7 @@ import pickle
 import argparse
 
 
+
 parser = argparse.ArgumentParser(description='Convert seqs and labels'
                                  ' files to dense tensors and then into'
                                  ' TFRecord files for efficient batching'
@@ -37,7 +38,7 @@ parser.add_argument('--max_v', type=int,
                     help='Maximum value of |V|. That is, the most codes'
                     ' appearing in any single visit. Note that no visit'
                     ' in any of train, test, or predict should have'
-                    ' more than max_v codes.', default=10)
+                    ' more than max_v codes. default=10', default=10)
 parser.add_argument('--max_t', type=int,
                     help='The maximum value of |T|. That is, the most'
                     ' visits in any patients\'s record. Note that no'
@@ -46,7 +47,7 @@ parser.add_argument('--max_t', type=int,
 parser.add_argument('--seqs_file', type=str,
                     help='Path to sequences file. Sequences file should'
                     ' be list of list. See README of original'
-                    ' implementation.', default='seqs')
+                    ' implementation. default="seqs"', default='seqs')
 parser.add_argument('--labels_file', type=str,
                     help='Path to labels file. Labels file should'
                     ' be list of list. See README of original'
@@ -173,7 +174,7 @@ def tensorize_seqs(seqs, args=args, true_seqs=False):
                 mask_batch = []
             new_patient = []
     patients = tf.constant(patients)
-    patients_ts = patients_ts
+    patients_ts = tf.cast(patients_ts, tf.float32)
     row_masks = tf.not_equal(patients, -2)
     row_masks = tf.cast(row_masks, tf.int32)
     patients = tf.reshape(patients, [args.n_patients, -1])
@@ -209,7 +210,7 @@ def serialize_lab(patient, label, row_mask, patient_t, args=args):
     """Turn each row of zipped dataset to example protos for writing to TFR."""
     ex = tf.train.SequenceExample()
     # Non-sequential features of the Example
-    ex.context.feature["patient_t"].int64_list.value.append(patient_t)
+    ex.context.feature["patient_t"].float_list.value.append(patient_t)
     ex.context.feature["max_t"].int64_list.value.append(args.max_t)
     ex.context.feature["max_v"].int64_list.value.append(args.max_v)
     # Feature lists for the "sequential" features of the Example
@@ -227,7 +228,7 @@ def serialize_dem(patient, demo, row_mask, patient_t, args=args):
     """Turn each row of zipped dataset to example protos for writing to TFR."""
     ex = tf.train.SequenceExample()
     # Non-sequential features of the Example
-    ex.context.feature["patient_t"].int64_list.value.append(patient_t)
+    ex.context.feature["patient_t"].float_list.value.append(patient_t)
     ex.context.feature["max_t"].int64_list.value.append(args.max_t)
     ex.context.feature["max_v"].int64_list.value.append(args.max_v)
     ex.context.feature["demo_dim"].int64_list.value.append(args.demo_dim)
@@ -246,7 +247,7 @@ def serialize(patient, row_mask, patient_t, args=args):
     """Turn each row of zipped dataset to example protos for writing to TFR."""
     ex = tf.train.SequenceExample()
     # Non-sequential features of the Example
-    ex.context.feature["patient_t"].int64_list.value.append(patient_t)
+    ex.context.feature["patient_t"].float_list.value.append(patient_t)
     ex.context.feature["max_t"].int64_list.value.append(args.max_t)
     ex.context.feature["max_v"].int64_list.value.append(args.max_v)
     # Feature lists for the "sequential" features of the Example
@@ -329,4 +330,3 @@ if __name__ == '__main__':
     writeop = writer.write(serialized)
     sess.run(writeop)
     print("Done.")
-

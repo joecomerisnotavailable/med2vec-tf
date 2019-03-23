@@ -6,7 +6,6 @@
                   Choi, et al.
 """
 
-import numpy as np
 import tensorflow as tf
 from sklearn.model_selection import train_test_split
 import pickle
@@ -185,7 +184,8 @@ def choose_parse_function(args=args):
 
     It seems ugly to have four separate functions, but doing these
     checks here is more efficient than mapping a function that does the
-    checks internally to avoid the extra code."""
+    checks internally to avoid the extra code.
+    """
     if args.labels and args.demo:
         print("LAB_DEM")
         parse_func = parse_lab_dem
@@ -226,14 +226,14 @@ def codes_cost(patients, row_masks, visit_counts, W_c, b_c, args=args):
     """Calculate the cost for the code embeddings."""
     with tf.name_scope("Codes_Cost"):
         visit_counts = tf.cast(visit_counts, tf.float32, name="cc_visit_counts")
-        W_c_prime = tf.nn.relu(W_c, name="w_c_prime")
+        W_c_prime = tf.nn.relu(tf.transpose(W_c), name="w_c_prime")
 
         # tf.matmul doesn't broadcast, and we need to keep these grouped by
         # visit, so we need to tile W_c to one copy for every (real or
         # dummy) visit.
         W_c_tiled = tf.expand_dims(W_c_prime, 0, name="w_c_tiled")
         W_c_tiled = tf.expand_dims(W_c_tiled, 0, name="w_c_tiled")
-        W_c_tiled = tf.tile(W_c_tiled, [2, args.max_t, 1, 1], name="w_c_tiled")
+        W_c_tiled = tf.tile(W_c_tiled, [args.n_patients, args.max_t, 1, 1], name="w_c_tiled")
 
         # w_ij is a n_patients X max_t array of code_emb_dim X max_v
         # matrices whose columns are the representations of the codes
@@ -291,7 +291,6 @@ def codes_cost(patients, row_masks, visit_counts, W_c, b_c, args=args):
 
 def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
     """Get hat{y}_t."""
-
     with tf.name_scope("Make_Predictions"):
         # We don't need to group by visit in this branch. We also don't need
         # to buffer patients with dummy visits.
@@ -301,8 +300,13 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
 
         if D_t is not None:
             d_2d = tf.reshape(D_t, [-1, demo_dim], name="pred_d_2d")
+        else:
+            d_2d = None
 
-        u_ts = tf.matmul(W_c, x_2d, transpose_b=True, name="pred_u_ts")
+        u_ts = tf.matmul(x_2d, W_c,
+                         #transpose_b=True,
+                         name="pred_u_ts")
+        u_ts = tf.transpose(u_ts)
         u_ts = tf.add(u_ts, b_c, name="pred_u_ts")
         u_ts = tf.transpose(u_ts, name="pred_u_ts")
 
@@ -310,7 +314,10 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
         # dummy visits just like x_ts does. This also ensures that
         # everything aligns correctly when we concatenate, here.
         # But after concatenating, we can ditch the dummy visits.
-        full_vec = tf.concat([u_ts, d_2d], axis=-1, name="pred_full_vec")
+        if d_2d is not None:
+            full_vec = tf.concat([u_ts, d_2d], axis=-1, name="pred_full_vec")
+        else:
+            full_vec = u_ts
         full_vec = tf.boolean_mask(full_vec, dummy_visit_mask, name="pred_full_vec")
 
         v_t = tf.matmul(W_v, full_vec, transpose_b=True, name="pred_vt")
@@ -419,7 +426,7 @@ def visits_cost(labels, y_2d, visit_counts, args):
 def create_vars(demo_dim, args=args):
     """Define weight matrices and biases."""
     with tf.variable_scope("Embeddings"):
-        W_c = tf.Variable(tf.truncated_normal([args.code_emb_dim, args.n_codes],
+        W_c = tf.Variable(tf.truncated_normal([args.n_codes, args.code_emb_dim],
                           mean=0.0,
                           stddev=1.0,
                           dtype=tf.float32
@@ -438,7 +445,7 @@ def create_vars(demo_dim, args=args):
                                               ),
                           name="W_s")
 
-        b_c = tf.Variable(tf.zeros([W_c.shape[0], 1], dtype=tf.float32), name="b_c")
+        b_c = tf.Variable(tf.zeros([W_c.shape[1], 1], dtype=tf.float32), name="b_c")
         b_v = tf.Variable(tf.zeros([W_v.shape[0], 1], dtype=tf.float32), name="b_v")
         b_s = tf.Variable(tf.zeros([W_s.shape[0], 1], dtype=tf.float32), name="b_s")
         return W_c, W_v, W_s, b_c, b_v, b_s
@@ -452,7 +459,6 @@ def get_demo_dim(filelist, parse_function, args=args):
         serial = temp_it.get_next()
         sample = parse_function(serial)['demo']
         demo_dim = sess.run(sample).shape[-1]
-    print("FUICKFUCKFUT F", demo_dim)
     return demo_dim
 
 
@@ -467,37 +473,43 @@ if __name__ == '__main__':
                                                test_size=0.25)
     validation_files, test_files = train_test_split(holdout,
                                                     test_size=0.4)
+    if len(training_files) == 0:
+        training_files.append(filelist[0])
+    if len(validation_files) == 0:
+        validation_files.append(filelist[0])
 
-    filenames = tf.placeholder(tf.string, shape=[None])
+    with tf.name_scope("Batch"):
+        filenames = tf.placeholder(tf.string, shape=[None])
 
-    data = tf.data.TFRecordDataset(filenames)
-    data = data.map(parse_function)
+        data = tf.data.TFRecordDataset(filenames)
+        data = data.map(parse_function)
 
-    data = data.batch(args.n_patients)
-    iterator = data.make_initializable_iterator()
+        data = data.batch(args.n_patients)
+        iterator = data.make_initializable_iterator()
 
-    batch = iterator.get_next()
+        batch = iterator.get_next()
 
-    patients = batch['patient']
-    patients = tf.one_hot(patients, args.n_codes, name="one_hot_patients")
-    if args.labels:
-        print("######### LABEL IN ARGS")
-        labels = batch['label']
-        labels = tf.one_hot(labels, args.n_labels, name="one_hot_labels")
-    else:
-        labels = patients
-        args_dict['n_labels'] = args.n_patients
-    if args.demo:
-        demo = batch['demo']
-    else:
-        demo = None
-        demo_dim = 0
-    row_masks = batch['row_mask']
-    visit_counts = batch['patient_t']
+        patients = batch['patient']
+        patients = tf.one_hot(patients, args.n_codes, name="one_hot_patients")
+        if args.labels:
+            print("######### LABEL IN ARGS")
+            labels = batch['label']
+            labels = tf.one_hot(labels, args.n_labels, name="one_hot_labels")
+        else:
+            labels = patients
+            args_dict['n_labels'] = args.n_codes
+        if args.demo:
+            demo = batch['demo']
+        else:
+            demo = None
+            demo_dim = 0
+        row_masks = batch['row_mask']
+        visit_counts = batch['patient_t']
 
     W_c, W_v, W_s, b_c, b_v, b_s = create_vars(demo_dim)
 
-    x_ts = tf.reduce_sum(patients, -2, name="global_x_ts")
+    with tf.name_scope("Binary_visit_reps"):
+        x_ts = tf.reduce_sum(patients, -2, name="global_x_ts")
 
     if args.labels:
         # The call to tf.minimum is because labels may not be unique
@@ -534,7 +546,6 @@ if __name__ == '__main__':
         writer = tf.summary.FileWriter(os.path
                                          .join(args.root_dir, args.log_dir),
                                        sess.graph)
-
 
         sess.run(init)
 
@@ -584,7 +595,8 @@ if __name__ == '__main__':
                           "b_c": sess.run(b_c),
                           "b_v": sess.run(b_v),
                           "b_s": sess.run(b_s)}
-        emb_path = os.path.join(args.root_dir + args.data_dir, "embeddings")
+
+        emb_path = os.path.join(args.root_dir + args.log_dir, "embeddings")
         with open(emb_path, 'wb') as emb_file:
-            pickle.dump(embedding_dict, emb_file)
+            pickle.dump(embedding_dict, emb_file, protocol=2)
         save_path = saver.save(sess, './saved_model')
