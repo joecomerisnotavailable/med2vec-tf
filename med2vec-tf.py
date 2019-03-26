@@ -66,6 +66,34 @@ args = parser.parse_args()
 args_dict = vars(args)
 
 
+def printProgressBar(it,
+                     total,
+                     prefix='',
+                     suffix='',
+                     decimals=1,
+                     length=40,
+                     fill='█'):
+    """
+    Call in a loop to create terminal progress bar
+    @params:
+        iteration   - Required  : current iteration (Int)
+        total       - Required  : total iterations (Int)
+        prefix      - Optional  : prefix string (Str)
+        suffix      - Optional  : suffix string (Str)
+        decimals    - Optional  : positive number of decimals in percent
+                                  complete (Int)
+        length      - Optional  : character length of bar (Int)
+        fill        - Optional  : bar fill character (Str)
+    """
+    percent = ("{0:." + str(decimals) + "f}").format(100 * (it / float(total)))
+    filledLength = int(length * it // total)
+    bar = fill * filledLength + '-' * (length - filledLength)
+    print('\r%s |%s| %s%% %s' % (prefix, bar, percent, suffix), end='\r')
+    # Print New Line on Complete
+    if it == total:
+        print()
+
+
 def parse_lab_dem(example_proto, args=args):
     """Prepare TFRecords for training."""
     ctxt_fts = {
@@ -554,10 +582,10 @@ if __name__ == '__main__':
                                              sess.graph)
 
         sess.run(init)
-
+        print_train = -0.0
+        print_val = -0.0
         for ep in range(args.n_epochs):
-            avg_val_cost = 0
-            count = 0
+
             sess.run(iterator.initializer,
                      feed_dict={filenames: training_files})
             try:
@@ -568,8 +596,12 @@ if __name__ == '__main__':
             sess.run(iterator.initializer,
                      feed_dict={filenames: training_files})
             summ = sess.run(merged)
-
-            print("Epoch {} Training Cost:\n\t".format(ep), sess.run(cost))
+            print_train = sess.run(cost)
+            printProgressBar(ep,
+                             args.n_epochs,
+                             prefix='Ep {}:'.format(ep),
+                             suffix='Train:{t:.1f}, Val: {v:.1f}'
+                             .format(t=print_train, v=print_val))
 
             train_writer.add_summary(summ, ep)
             # Initialize iterator with validation data
@@ -577,18 +609,15 @@ if __name__ == '__main__':
                 sess.run(iterator.initializer,
                          feed_dict={filenames: validation_files})
                 summ = sess.run(merged)
-
-                print("Epoch {} Training Cost:\n\t".format(ep), sess.run(cost))
+                print_val = sess.run(cost)
+                printProgressBar(ep,
+                                 args.n_epochs,
+                                 prefix='Ep {}:'.format(ep),
+                                 suffix='Train:{t:.1f}, Val: {v:.1f}'
+                                 .format(t=print_train, v=print_val))
 
                 valid_writer.add_summary(summ, ep)
-                try:
-                    while True:
-                        avg_val_cost += sess.run(cost)
-                        count += 1
-                except tf.errors.OutOfRangeError:
-                    pass
-                print("Epoch {} Validation Cost:\n\t".format(ep),
-                      avg_val_cost / count)
+
                 save_path = saver.save(sess,
                                        os.path.join(args.root_dir,
                                                     args.log_dir,
