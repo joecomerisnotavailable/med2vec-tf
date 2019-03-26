@@ -454,12 +454,13 @@ def create_vars(demo_dim, args=args):
 
 def get_demo_dim(filelist, parse_function, args=args):
     """Retrieve the demo vector dimension before the full graph runs."""
-    with tf.Session() as sess:
-        temp_ds = tf.data.TFRecordDataset(filelist[0])
-        temp_it = temp_ds.make_one_shot_iterator()
-        serial = temp_it.get_next()
-        sample = parse_function(serial)['demo']
-        demo_dim = sess.run(sample).shape[-1]
+    with tf.name_scope("get_demo_dimension"):
+        with tf.Session() as sess:
+            temp_ds = tf.data.TFRecordDataset(filelist[0])
+            temp_it = temp_ds.make_one_shot_iterator()
+            serial = temp_it.get_next()
+            sample = parse_function(serial)['demo']
+            demo_dim = sess.run(sample).shape[-1]
     return demo_dim
 
 
@@ -527,13 +528,11 @@ if __name__ == '__main__':
 
     cost = tf.add(code_cost, visit_cost, name="cost")
     with tf.name_scope("Summaries"):
-        training_code_cost = tf.summary.scalar("Train_code_cost", code_cost)
-        training_visit_cost = tf.summary.scalar("Train_visit_cost", visit_cost)
-        training_cost = tf.summary.scalar("Train_cost", cost)
+        summ_code_cost = tf.summary.scalar("Train_code_cost", code_cost)
+        summ_visit_cost = tf.summary.scalar("Train_visit_cost", visit_cost)
+        summ_cost = tf.summary.scalar("Train_cost", cost)
 
-        val_code_cost = tf.summary.scalar("Validation_code_cost", code_cost)
-        val_visit_cost = tf.summary.scalar("Validation_visit_cost", visit_cost)
-        val_cost = tf.summary.scalar("Validation_cost", cost)
+        merged = tf.summary.merge_all()
 
     optimizer = tf.train.AdamOptimizer(name="optimizer").minimize(cost)
 
@@ -543,9 +542,16 @@ if __name__ == '__main__':
                             'b_c': b_c, 'b_v': b_v, 'b_s': b_s})
 
     with tf.Session() as sess:
-        writer = tf.summary.FileWriter(os.path
-                                         .join(args.root_dir, args.log_dir),
-                                       sess.graph)
+        train_writer = tf.summary.FileWriter(os.path
+                                             .join(args.root_dir,
+                                                   args.log_dir,
+                                                   "training"),
+                                             sess.graph)
+        valid_writer = tf.summary.FileWriter(os.path
+                                             .join(args.root_dir,
+                                                   args.log_dir,
+                                                   "validation"),
+                                             sess.graph)
 
         sess.run(init)
 
@@ -561,34 +567,29 @@ if __name__ == '__main__':
                 pass
             sess.run(iterator.initializer,
                      feed_dict={filenames: training_files})
-            cc_summ, vc_summ, cost_summ = sess.run([training_code_cost,
-                                                    training_visit_cost,
-                                                    training_cost])
+            summ = sess.run(merged)
 
             print("Epoch {} Training Cost:\n\t".format(ep), sess.run(cost))
-            writer.add_summary(cc_summ, ep)
-            writer.add_summary(vc_summ, ep)
-            writer.add_summary(cost_summ, ep)
 
+            train_writer.add_summary(summ, ep)
             # Initialize iterator with validation data
-            sess.run(iterator.initializer,
-                     feed_dict={filenames: validation_files})
-            cc_summ, vc_summ, cost_summ = sess.run([val_code_cost,
-                                                    val_visit_cost,
-                                                    val_cost])
-            print("Epoch {} Training Cost:\n\t".format(ep), sess.run(cost))
-            writer.add_summary(cc_summ, ep)
-            writer.add_summary(vc_summ, ep)
-            writer.add_summary(cost_summ, ep)
-            try:
-                while True:
-                    avg_val_cost += sess.run(cost)
-                    count += 1
-            except tf.errors.OutOfRangeError:
-                pass
+            if ep % 5 == 0:
+                sess.run(iterator.initializer,
+                         feed_dict={filenames: validation_files})
+                summ = sess.run(merged)
 
-            print("Epoch {} Validation Cost:\n\t".format(ep),
-                  avg_val_cost / count)
+                print("Epoch {} Training Cost:\n\t".format(ep), sess.run(cost))
+
+                valid_writer.add_summary(summ, ep)
+                try:
+                    while True:
+                        avg_val_cost += sess.run(cost)
+                        count += 1
+                except tf.errors.OutOfRangeError:
+                    pass
+
+                print("Epoch {} Validation Cost:\n\t".format(ep),
+                      avg_val_cost / count)
         embedding_dict = {"W_c": sess.run(W_c),
                           "W_v": sess.run(W_v),
                           "W_s": sess.run(W_s),
