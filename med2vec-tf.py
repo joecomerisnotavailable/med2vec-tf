@@ -587,17 +587,19 @@ if __name__ == '__main__':
                         count += 1
                 except tf.errors.OutOfRangeError:
                     pass
-
                 print("Epoch {} Validation Cost:\n\t".format(ep),
                       avg_val_cost / count)
+                save_path = saver.save(sess,
+                                       os.path.join(args.root_dir,
+                                                    args.log_dir,
+                                                    str(ep) + '_saved_model'))
+
         embedding_dict = {"W_c": sess.run(W_c),
                           "W_v": sess.run(W_v),
                           "W_s": sess.run(W_s),
                           "b_c": sess.run(b_c),
                           "b_v": sess.run(b_v),
                           "b_s": sess.run(b_s)}
-
         emb_path = os.path.join(args.root_dir + args.log_dir, "embeddings")
         with open(emb_path, 'wb') as emb_file:
             pickle.dump(embedding_dict, emb_file, protocol=2)
-        save_path = saver.save(sess, './saved_model')
