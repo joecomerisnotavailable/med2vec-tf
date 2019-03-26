@@ -528,9 +528,9 @@ if __name__ == '__main__':
 
     cost = tf.add(code_cost, visit_cost, name="cost")
     with tf.name_scope("Summaries"):
-        summ_code_cost = tf.summary.scalar("Train_code_cost", code_cost)
-        summ_visit_cost = tf.summary.scalar("Train_visit_cost", visit_cost)
-        summ_cost = tf.summary.scalar("Train_cost", cost)
+        summ_code_cost = tf.summary.scalar("Code_cost", code_cost)
+        summ_visit_cost = tf.summary.scalar("Visit_cost", visit_cost)
+        summ_cost = tf.summary.scalar("Total_cost", cost)
 
         merged = tf.summary.merge_all()
 
