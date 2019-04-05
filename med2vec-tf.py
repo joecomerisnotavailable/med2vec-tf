@@ -503,10 +503,13 @@ if __name__ == '__main__':
                                                test_size=0.25)
     validation_files, test_files = train_test_split(holdout,
                                                     test_size=0.4)
+
     if len(training_files) == 0:
         training_files.append(filelist[0])
     if len(validation_files) == 0:
         validation_files.append(filelist[0])
+
+    n_train_files = len(training_files)
 
     with tf.name_scope("Batch"):
         filenames = tf.placeholder(tf.string, shape=[None])
@@ -584,8 +587,9 @@ if __name__ == '__main__':
         sess.run(init)
         print_train = -0.0
         print_val = -0.0
-        for ep in range(args.n_epochs):
 
+        for ep in range(args.n_epochs):
+            it = 0
             sess.run(iterator.initializer,
                      feed_dict={filenames: training_files})
             try:
@@ -599,10 +603,12 @@ if __name__ == '__main__':
             print_train = sess.run(cost)
             printProgressBar(ep,
                              args.n_epochs,
-                             prefix='Ep {}:'.format(ep),
+                             prefix='Ep {e}/{t}:'.format(e=ep,
+                                                         t=args.n_epochs),
                              suffix='Train:{t:.1f}, Val: {v:.1f}'
-                             .format(t=print_train, v=print_val))
-
+                             .format(t=print_train, v=print_val)
+                             )
+            it += 1
             train_writer.add_summary(summ, ep)
             # Initialize iterator with validation data
             if ep % 5 == 0:
@@ -610,11 +616,13 @@ if __name__ == '__main__':
                          feed_dict={filenames: validation_files})
                 summ = sess.run(merged)
                 print_val = sess.run(cost)
-                printProgressBar(ep,
-                                 args.n_epochs,
-                                 prefix='Ep {}:'.format(ep),
+                printProgressBar(it,
+                                 n_train_files,
+                                 prefix='Ep {e}/{t}:'.format(e=ep,
+                                                             t=args.n_epochs),
                                  suffix='Train:{t:.1f}, Val: {v:.1f}'
-                                 .format(t=print_train, v=print_val))
+                                 .format(t=print_train, v=print_val)
+                                 )
 
                 valid_writer.add_summary(summ, ep)
 
@@ -622,7 +630,6 @@ if __name__ == '__main__':
                                        os.path.join(args.root_dir,
                                                     args.log_dir,
                                                     str(ep) + '_saved_model'))
-
         embedding_dict = {"W_c": sess.run(W_c),
                           "W_v": sess.run(W_v),
                           "W_s": sess.run(W_s),
