@@ -10,6 +10,7 @@ import tensorflow as tf
 from sklearn.model_selection import train_test_split
 import pickle
 import os
+from time import time
 
 
 import argparse
@@ -66,7 +67,14 @@ args = parser.parse_args()
 args_dict = vars(args)
 
 
-def printProgressBar(it,
+def h_m_s(time_delta):
+    """Convert seconds to hours, minutes, seconds string format."""
+    hours, r = divmod(int(time_delta), 3600)
+    minutes, seconds = divmod(r, 60)
+    return '{h}:{m:02d}:{m:02d}'.format(h=hours, m=minutes, s=seconds)
+
+
+def printprogressbar(it,
                      total,
                      prefix='',
                      suffix='',
@@ -74,7 +82,8 @@ def printProgressBar(it,
                      length=40,
                      fill='█'):
     """
-    Call in a loop to create terminal progress bar
+    Call in a loop to create terminal progress bar.
+
     @params:
         iteration   - Required  : current iteration (Int)
         total       - Required  : total iterations (Int)
@@ -86,8 +95,8 @@ def printProgressBar(it,
         fill        - Optional  : bar fill character (Str)
     """
     percent = ("{0:." + str(decimals) + "f}").format(100 * (it / float(total)))
-    filledLength = int(length * it // total)
-    bar = fill * filledLength + '-' * (length - filledLength)
+    filledlength = int(length * it // total)
+    bar = fill * filledlength + '-' * (length - filledlength)
     print('\r%s |%s| %s%% %s' % (prefix, bar, percent, suffix), end='\r')
     # Print New Line on Complete
     if it == total:
@@ -254,7 +263,8 @@ def col_masks(patients, args=args):
 def codes_cost(patients, row_masks, visit_counts, W_c, b_c, args=args):
     """Calculate the cost for the code embeddings."""
     with tf.name_scope("Codes_Cost"):
-        visit_counts = tf.cast(visit_counts, tf.float32, name="cc_visit_counts")
+        visit_counts = tf.cast(visit_counts, tf.float32,
+                               name="cc_visit_counts")
         W_c_prime = tf.nn.relu(tf.transpose(W_c), name="w_c_prime")
 
         # tf.matmul doesn't broadcast, and we need to keep these grouped by
@@ -262,7 +272,8 @@ def codes_cost(patients, row_masks, visit_counts, W_c, b_c, args=args):
         # dummy) visit.
         W_c_tiled = tf.expand_dims(W_c_prime, 0, name="w_c_tiled")
         W_c_tiled = tf.expand_dims(W_c_tiled, 0, name="w_c_tiled")
-        W_c_tiled = tf.tile(W_c_tiled, [args.n_patients, args.max_t, 1, 1], name="w_c_tiled")
+        W_c_tiled = tf.tile(W_c_tiled, [args.n_patients, args.max_t, 1, 1],
+                            name="w_c_tiled")
 
         # w_ij is a n_patients X max_t array of code_emb_dim X max_v
         # matrices whose columns are the representations of the codes
@@ -309,8 +320,10 @@ def codes_cost(patients, row_masks, visit_counts, W_c, b_c, args=args):
         # patient-by-patient division.
         visit_counts = tf.expand_dims(visit_counts, -1, name="cc_visit_counts")
         summands_w_dummies = non_norm_summands / visit_counts
-        summands = tf.boolean_mask(summands_w_dummies, row_masks, name="summands")
-        codes_cost_per_visit = tf.reduce_sum(summands, -1, name="codes_cost_per_visit")
+        summands = tf.boolean_mask(summands_w_dummies, row_masks,
+                                   name="summands")
+        codes_cost_per_visit = tf.reduce_sum(summands, -1,
+                                             name="codes_cost_per_visit")
 
         # Final cost is the batch average per patient of each patient's
         # average per visit cost
@@ -323,9 +336,12 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
     with tf.name_scope("Make_Predictions"):
         # We don't need to group by visit in this branch. We also don't need
         # to buffer patients with dummy visits.
-        x_2d = tf.reshape(x_ts, [-1, args.n_codes], name="pred_x2d")
-        dummy_visit_mask = tf.minimum(tf.reduce_sum(x_2d, -1), 1, name="pred_dummy_vm")
-        dummy_visit_mask = tf.reshape(dummy_visit_mask, [-1,], name="pred_dummy_vm")
+        x_2d = tf.reshape(x_ts, [-1, args.n_codes],
+                          name="pred_x2d")
+        dummy_visit_mask = tf.minimum(tf.reduce_sum(x_2d, -1), 1,
+                                      name="pred_dummy_vm")
+        dummy_visit_mask = tf.reshape(dummy_visit_mask, [-1,],
+                                      name="pred_dummy_vm")
 
         if D_t is not None:
             d_2d = tf.reshape(D_t, [-1, demo_dim], name="pred_d_2d")
@@ -333,7 +349,6 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
             d_2d = None
 
         u_ts = tf.matmul(x_2d, W_c,
-                         #transpose_b=True,
                          name="pred_u_ts")
         u_ts = tf.transpose(u_ts)
         u_ts = tf.add(u_ts, b_c, name="pred_u_ts")
@@ -347,7 +362,8 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
             full_vec = tf.concat([u_ts, d_2d], axis=-1, name="pred_full_vec")
         else:
             full_vec = u_ts
-        full_vec = tf.boolean_mask(full_vec, dummy_visit_mask, name="pred_full_vec")
+        full_vec = tf.boolean_mask(full_vec, dummy_visit_mask,
+                                   name="pred_full_vec")
 
         v_t = tf.matmul(W_v, full_vec, transpose_b=True, name="pred_vt")
         v_t = tf.add(v_t, b_v, name="pred_vt")
@@ -371,12 +387,14 @@ def visits_cost(labels, y_2d, visit_counts, args):
     outputs: The scalar visits prediction cost.
     """
     with tf.name_scope("Visits_Cost"):
-        visit_counts = tf.cast(visit_counts, tf.float32, name="vc_visit_counts")
+        visit_counts = tf.cast(visit_counts, tf.float32,
+                               name="vc_visit_counts")
         # We'll add the x vectors within the window before taking the dot
         # product with \hat{y}_t. To do this, we need to use a sliding
         # window, and to make sure patients' sums don't gather terms
         # from other patients, we need to pad each patient
-        x_pad = tf.pad(labels, [[0, 0], [args.win, args.win], [0, 0]], name="x_pad")
+        x_pad = tf.pad(labels, [[0, 0], [args.win, args.win], [0, 0]],
+                       name="x_pad")
 
         # Because different \hat{y}_t have different numbers of
         # neighboring x_t in their window, we can't really avoid passing
@@ -384,22 +402,30 @@ def visits_cost(labels, y_2d, visit_counts, args):
         # from 2*win / visit_counts, say
         z_pad = tf.subtract(1., x_pad, name="vc_z_pad")
 
-        # Note that this is a different mask than the one produced in predictions.
-        visit_mask = tf.minimum(tf.reduce_sum(x_pad, -1), 1, name="vc_visit_mask")
+        # Note that this is a different mask than the one produced in
+        # predictions.
+        visit_mask = tf.minimum(tf.reduce_sum(x_pad, -1), 1,
+                                name="vc_visit_mask")
         visit_mask = tf.reshape(visit_mask, [-1,], name="vc_visit_mask")
 
         # We need to flatten x_pad to do the window function, so divide each x
         # by the number of visits of that patient *first*.
-        normed_x_pad = x_pad / tf.reshape(visit_counts, [args.n_patients, 1, 1])
-        normed_z_pad = z_pad / tf.reshape(visit_counts, [args.n_patients, 1, 1])
+        normed_x_pad = x_pad / tf.reshape(visit_counts,
+                                          [args.n_patients, 1, 1])
+        normed_z_pad = z_pad / tf.reshape(visit_counts,
+                                          [args.n_patients, 1, 1])
 
-        normed_x_pad_2d = tf.reshape(normed_x_pad, [-1, args.n_labels], name="vc_normed_x_pad_2d")
-        normed_z_pad_2d = tf.reshape(normed_z_pad, [-1, args.n_labels], name="vc_normed_x_pad_2d")
+        normed_x_pad_2d = tf.reshape(normed_x_pad, [-1, args.n_labels],
+                                     name="vc_normed_x_pad_2d")
+        normed_z_pad_2d = tf.reshape(normed_z_pad, [-1, args.n_labels],
+                                     name="vc_normed_x_pad_2d")
 
         # Before we padded around each patient. Now pad around the entire
         # list of visits
-        x_double_pad = tf.pad(normed_x_pad_2d, [[args.win, args.win], [0, 0]], name="x_double_pad")
-        z_double_pad = tf.pad(normed_z_pad_2d, [[args.win, args.win], [0, 0]], name="z_double_pad")
+        x_double_pad = tf.pad(normed_x_pad_2d, [[args.win, args.win], [0, 0]],
+                              name="x_double_pad")
+        z_double_pad = tf.pad(normed_z_pad_2d, [[args.win, args.win], [0, 0]],
+                              name="z_double_pad")
 
         slice_height = args.n_patients * (args.max_t + args.win * 2)
         slice_shape = [slice_height, args.n_labels]
@@ -416,10 +442,14 @@ def visits_cost(labels, y_2d, visit_counts, args):
             parts = tf.concat([tf.zeros(win_start, dtype=tf.int32),
                                tf.ones(slice_height, dtype=tf.int32),
                                tf.zeros(tail_length, dtype=tf.int32)], -1)
-            summandx = tf.dynamic_partition(x_double_pad, num_partitions=2,
-                                            partitions=parts, name="summandx")[1]
-            summandz = tf.dynamic_partition(z_double_pad, num_partitions=2,
-                                            partitions=parts, name="summandz")[1]
+            summandx = tf.dynamic_partition(x_double_pad,
+                                            num_partitions=2,
+                                            partitions=parts,
+                                            name="summandx")[1]
+            summandz = tf.dynamic_partition(z_double_pad,
+                                            num_partitions=2,
+                                            partitions=parts,
+                                            name="summandz")[1]
             return (win_start - 1, tf.add(totalx, summandx),
                     tf.add(totalz, summandz))
 
@@ -428,22 +458,32 @@ def visits_cost(labels, y_2d, visit_counts, args):
         totalx = tf.zeros(slice_shape, dtype=tf.float32, name="totalx")
         totalz = tf.zeros(slice_shape, dtype=tf.float32, name="totalz")
         loop_cond = lambda win_start, totalx, totalz: tf.less(-1, win_start)
-        loop_fn = lambda win_start, totalx, totalz: loop_ops(win_start, totalx, totalz)
+        loop_fn = lambda win_start, totalx, totalz: loop_ops(win_start,
+                                                             totalx,
+                                                             totalz)
         _, window_x_total, window_z_total = tf.while_loop(loop_cond,
                                                           loop_ops,
                                                           (win_start,
                                                            totalx,
-                                                           totalz), name="while_loop")
+                                                           totalz),
+                                                          name="while_loop")
 
         # Subtract out x_{t+0}
-        correct_x_totals_pad = tf.subtract(window_x_total, normed_x_pad_2d, name="correct_x_totals_pad")
-        correct_z_totals_pad = tf.subtract(window_z_total, normed_z_pad_2d, name="correct_z_totals_pad")
+        correct_x_totals_pad = tf.subtract(window_x_total, normed_x_pad_2d,
+                                           name="correct_x_totals_pad")
+        correct_z_totals_pad = tf.subtract(window_z_total, normed_z_pad_2d,
+                                           name="correct_z_totals_pad")
 
-        final_x_total = tf.boolean_mask(correct_x_totals_pad, visit_mask, name="final_x_cost")
-        final_z_total = tf.boolean_mask(correct_z_totals_pad, visit_mask, name="final_z_cost")
+        final_x_total = tf.boolean_mask(correct_x_totals_pad, visit_mask,
+                                        name="final_x_cost")
+        final_z_total = tf.boolean_mask(correct_z_totals_pad, visit_mask,
+                                        name="final_z_cost")
 
-        summandsx = tf.multiply(final_x_total, tf.log(y_2d + args.log_eps), name="summandsx")
-        summandsz = tf.multiply(final_z_total, tf.log(1. - y_2d + args.log_eps), name="summandsz")
+        summandsx = tf.multiply(final_x_total, tf.log(y_2d + args.log_eps),
+                                name="summandsx")
+        summandsz = tf.multiply(final_z_total,
+                                tf.log(1. - y_2d + args.log_eps),
+                                name="summandsz")
 
         sumx = tf.reduce_sum(summandsx, name="sumx")
         sumz = tf.reduce_sum(summandsz, name="sumz")
@@ -455,28 +495,34 @@ def visits_cost(labels, y_2d, visit_counts, args):
 def create_vars(demo_dim, args=args):
     """Define weight matrices and biases."""
     with tf.variable_scope("Embeddings"):
-        W_c = tf.Variable(tf.truncated_normal([args.n_codes, args.code_emb_dim],
+        W_c = tf.Variable(tf.truncated_normal([args.n_codes,
+                                               args.code_emb_dim],
                           mean=0.0,
                           stddev=1.0,
                           dtype=tf.float32
                                               ),
                           name="W_c")
         W_v = tf.Variable(tf.truncated_normal(
-                          shape=[args.visit_emb_dim, args.code_emb_dim + demo_dim],
+                          shape=[args.visit_emb_dim,
+                                 args.code_emb_dim + demo_dim],
                           mean=0.0,
                           stddev=1.0,
                           dtype=tf.float32),
                           name="W_v")
-        W_s = tf.Variable(tf.truncated_normal([args.n_labels, args.visit_emb_dim],
+        W_s = tf.Variable(tf.truncated_normal([args.n_labels,
+                                               args.visit_emb_dim],
                           mean=0.0,
                           stddev=1.0,
                           dtype=tf.float32
                                               ),
                           name="W_s")
 
-        b_c = tf.Variable(tf.zeros([W_c.shape[1], 1], dtype=tf.float32), name="b_c")
-        b_v = tf.Variable(tf.zeros([W_v.shape[0], 1], dtype=tf.float32), name="b_v")
-        b_s = tf.Variable(tf.zeros([W_s.shape[0], 1], dtype=tf.float32), name="b_s")
+        b_c = tf.Variable(tf.zeros([W_c.shape[1], 1], dtype=tf.float32),
+                          name="b_c")
+        b_v = tf.Variable(tf.zeros([W_v.shape[0], 1], dtype=tf.float32),
+                          name="b_v")
+        b_s = tf.Variable(tf.zeros([W_s.shape[0], 1], dtype=tf.float32),
+                          name="b_s")
         return W_c, W_v, W_s, b_c, b_v, b_s
 
 
@@ -493,6 +539,7 @@ def get_demo_dim(filelist, parse_function, args=args):
 
 
 if __name__ == '__main__':
+    run_start = time()
     data_path = args.root_dir + args.data_dir
     parse_function = choose_parse_function()
     filelist = [os.path.join(data_path, filename)
@@ -589,7 +636,7 @@ if __name__ == '__main__':
         print_val = -0.0
 
         for ep in range(args.n_epochs):
-            it = 0
+            ep_start = time()
             sess.run(iterator.initializer,
                      feed_dict={filenames: training_files})
             try:
@@ -601,14 +648,13 @@ if __name__ == '__main__':
                      feed_dict={filenames: training_files})
             summ = sess.run(merged)
             print_train = sess.run(cost)
-            printProgressBar(ep,
+            printprogressbar(ep,
                              args.n_epochs,
-                             prefix='Ep {e}/{t}:'.format(e=ep,
-                                                         t=args.n_epochs),
-                             suffix='Train:{t:.1f}, Val: {v:.1f}'
-                             .format(t=print_train, v=print_val)
-                             )
-            it += 1
+                             prefix='Ep {e}'.format(e=ep),
+                             suffix='Ep {a} | All {b}'
+                             .format(a=h_m(ep_start - time()),
+                                     b=h_m(run_start - time())
+                                     ))
             train_writer.add_summary(summ, ep)
             # Initialize iterator with validation data
             if ep % 5 == 0:
@@ -616,13 +662,13 @@ if __name__ == '__main__':
                          feed_dict={filenames: validation_files})
                 summ = sess.run(merged)
                 print_val = sess.run(cost)
-                printProgressBar(it,
-                                 n_train_files,
-                                 prefix='Ep {e}/{t}:'.format(e=ep,
-                                                             t=args.n_epochs),
-                                 suffix='Train:{t:.1f}, Val: {v:.1f}'
-                                 .format(t=print_train, v=print_val)
-                                 )
+                printprogressbar(ep,
+                                 args.n_epochs,
+                                 prefix='Ep {e}'.format(e=ep),
+                                 suffix='Ep {a} | All {b}'
+                                 .format(a=h_m(ep_start - time()),
+                                         b=h_m(run_start - time())
+                                         ))
 
                 valid_writer.add_summary(summ, ep)
 
