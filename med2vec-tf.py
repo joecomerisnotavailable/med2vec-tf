@@ -652,8 +652,8 @@ if __name__ == '__main__':
                              args.n_epochs,
                              prefix='Ep {e}'.format(e=ep),
                              suffix='Ep {a} | All {b}'
-                             .format(a=h_m(ep_start - time()),
-                                     b=h_m(run_start - time())
+                             .format(a=h_m_s(time() - ep_start),
+                                     b=h_m_s(time() - run_start)
                                      ))
             train_writer.add_summary(summ, ep)
             # Initialize iterator with validation data
@@ -666,8 +666,8 @@ if __name__ == '__main__':
                                  args.n_epochs,
                                  prefix='Ep {e}'.format(e=ep),
                                  suffix='Ep {a} | All {b}'
-                                 .format(a=h_m(ep_start - time()),
-                                         b=h_m(run_start - time())
+                                 .format(a=h_m_s(time() - ep_start),
+                                         b=h_m_s(time() - run_start)
                                          ))
 
                 valid_writer.add_summary(summ, ep)
