@@ -62,9 +62,21 @@ parser.add_argument('--labels', action='store_true',
                     help='Include this tag if TFRecords include labels.')
 parser.add_argument('--log_dir', type=str, help='Directory in which to '
                     'store log data. default="logs"', default="logs")
+parser.add_argument('--restore_checkpoint', action='store_true', help='Whether'
+                    ' to continue from previously saved graph. default=False')
+parser.add_argument('--checkpoint_dir', type=str, help='Path to saved graph '
+                    'information. default="checkpoints"', default='checkpoints'
+                    )
 
 args = parser.parse_args()
 args_dict = vars(args)
+
+
+if not os.path.exists(os.path.join(args.root_dir, args.log_dir, "training")):
+    os.makedirs(os.path.join(args.root_dir, args.log_dir, "training"))
+
+if not os.path.exists(os.path.join(args.root_dir, args.log_dir, "validation")):
+    os.makedirs(os.path.join(args.root_dir, args.log_dir, "validation"))
 
 
 def h_m_s(time_delta):
@@ -616,8 +628,7 @@ if __name__ == '__main__':
 
     init = tf.global_variables_initializer()
 
-    saver = tf.train.Saver({'W_c': W_c, 'W_v': W_v, 'W_s': W_s,
-                            'b_c': b_c, 'b_v': b_v, 'b_s': b_s})
+    saver = tf.train.Saver()
 
     with tf.Session() as sess:
         train_writer = tf.summary.FileWriter(os.path
@@ -630,12 +641,24 @@ if __name__ == '__main__':
                                                    args.log_dir,
                                                    "validation"),
                                              sess.graph)
-
-        sess.run(init)
+        restoring = (tf.train.checkpoint_exists(args.checkpoint_dir) and
+                     args.restore_checkpoint)
+        if restoring:
+            checkpoints = [int(f.split("_")[0])
+                           for f in os.listdir(args.checkpoint_dir)
+                           if len(f.split("_")) > 1]
+            start_ep = max(checkpoints)
+            saver.restore(sess,
+                          os.path.join(args.checkpoint_dir,
+                                       '{}_saved_model'
+                                       .format(start_ep)))
+        else:
+            start_ep = -1
+            sess.run(init)
         print_train = -0.0
         print_val = -0.0
 
-        for ep in range(args.n_epochs):
+        for ep in range(start_ep + 1, args.n_epochs):
             ep_start = time()
             sess.run(iterator.initializer,
                      feed_dict={filenames: training_files})
