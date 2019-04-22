@@ -1,6 +1,10 @@
 # med2vec-tf
 Tensorflow implementations of https://github.com/mp2893/med2vec
 
+
+## specific-predictions branch:
+Mask visits cost in order to prioritize the prediction of specific codes.
+
 ## To run:
 
 See readme for mp2893's implementation for correct form of seqs and labs files, or
