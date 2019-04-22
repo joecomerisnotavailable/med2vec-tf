@@ -135,7 +135,7 @@ def tensorize_seqs(seqs, args=args, true_seqs=False):
     true_seqs: bool. Are we tensorizing the true sequences? If false,
                we are tonsorizing labels or demo.
     returns:
-        patients: tensor with shape [patients, max_t, max_v]
+        patients: tensor with shape [patients, max_t * max_v]
 
         row_masks: numpy array with shape [patients, max_t, max_v]
                Later, we will create a [patients, max_t, max_v, |C|]
@@ -361,7 +361,7 @@ if __name__ == '__main__':
             data.append(tensors)
         data.extend([row_masks, patients_ts])
 
-        output = tf.data.Dataset().from_tensor_slices(tuple(data))
+        output = tf.data.Dataset.from_tensor_slices(tuple(data))
 
         serialized = output.map(map_func)
 
