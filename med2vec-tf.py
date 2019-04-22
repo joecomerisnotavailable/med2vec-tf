@@ -67,6 +67,12 @@ parser.add_argument('--restore_checkpoint', action='store_true', help='Whether'
 parser.add_argument('--checkpoint_dir', type=str, help='Path to saved graph '
                     'information. default="checkpoints"', default='checkpoints'
                     )
+parser.add_argument('--pred_subset_file', type=str, help='Path to pickled list'
+                    ' of codes to include in visits cost.'
+                    'default="visit_cost_codes"', default='visit_cost_codes')
+parser.add_argument('--icd_dict', type=str, help='Path to pickled '
+                    'icd-to-integer dictionary. default=icd_to_int',
+                    default='icd_to_int')
 
 args = parser.parse_args()
 args_dict = vars(args)
@@ -389,7 +395,7 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
         return y_2d
 
 
-def visits_cost(labels, y_2d, visit_counts, args):
+def visits_cost(labels, vc_code_mask, y_2d, visit_counts, args):
     """Calculate the visits cost.
 
     labels: If there is no labels file, the labels are just x_ts.
@@ -405,13 +411,15 @@ def visits_cost(labels, y_2d, visit_counts, args):
         # product with \hat{y}_t. To do this, we need to use a sliding
         # window, and to make sure patients' sums don't gather terms
         # from other patients, we need to pad each patient
+
+        masked_labels = tf.multiply(labels, vc_code_mask)
         x_pad = tf.pad(labels, [[0, 0], [args.win, args.win], [0, 0]],
                        name="x_pad")
 
         # Because different \hat{y}_t have different numbers of
         # neighboring x_t in their window, we can't really avoid passing
-        # 1-x_ts through the same loop as x_ts by subtracting final_x_totals
-        # from 2*win / visit_counts, say
+        # 1-x_ts through the same loop as x_ts (by subtracting final_x_totals
+        # from 2*win / visit_counts, say)
         z_pad = tf.subtract(1., x_pad, name="vc_z_pad")
 
         # Note that this is a different mask than the one produced in
@@ -419,6 +427,10 @@ def visits_cost(labels, y_2d, visit_counts, args):
         visit_mask = tf.minimum(tf.reduce_sum(x_pad, -1), 1,
                                 name="vc_visit_mask")
         visit_mask = tf.reshape(visit_mask, [-1,], name="vc_visit_mask")
+
+        x_pad = tf.pad(masked_labels,
+                       [[0, 0], [args.win, args.win], [0, 0]],
+                       name="x_pad_masked")
 
         # We need to flatten x_pad to do the window function, so divide each x
         # by the number of visits of that patient *first*.
@@ -563,6 +575,15 @@ if __name__ == '__main__':
     validation_files, test_files = train_test_split(holdout,
                                                     test_size=0.4)
 
+    pred_subset = pickle.load(open(args.pred_subset_file, 'rb'))
+    icd_dict = pickle.load(open(args.icd_dict, 'rb'))
+
+    pred_subset = [icd_dict[icd] for icd in pred_subset]
+
+    vc_code_mask = tf.one_hot(pred_subset, args.n_labels,
+                              name='vc_code_mask')
+    vc_code_mask = tf.reduce_sum(vc_code_mask, 0)
+
     if len(training_files) == 0:
         training_files.append(filelist[0])
     if len(validation_files) == 0:
@@ -614,7 +635,8 @@ if __name__ == '__main__':
                            visit_counts, W_c, b_c)
     y_2d = predictions(x_ts, W_c, demo, W_v, W_s,
                        b_c, b_v, b_s, demo_dim)
-    visit_cost = visits_cost(labels, y_2d, visit_counts, args)
+
+    visit_cost = visits_cost(labels, vc_code_mask, y_2d, visit_counts, args)
 
     cost = tf.add(code_cost, visit_cost, name="cost")
     with tf.name_scope("Summaries"):
@@ -631,6 +653,7 @@ if __name__ == '__main__':
     saver = tf.train.Saver()
 
     with tf.Session() as sess:
+        print(sess.run(vc_code_mask))
         train_writer = tf.summary.FileWriter(os.path
                                              .join(args.root_dir,
                                                    args.log_dir,
