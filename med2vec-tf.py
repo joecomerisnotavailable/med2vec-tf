@@ -365,6 +365,7 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
         u_ts = tf.transpose(u_ts)
         u_ts = tf.add(u_ts, b_c, name="pred_u_ts")
         u_ts = tf.transpose(u_ts, name="pred_u_ts")
+        u_ts = tf.nn.relu(u_ts, name="pred_u_ts")
 
         # In order to store D_t as a tensor it will need to have
         # dummy visits just like x_ts does. This also ensures that
@@ -380,6 +381,7 @@ def predictions(x_ts, W_c, D_t, W_v, W_s, b_c, b_v, b_s, demo_dim, args=args):
         v_t = tf.matmul(W_v, full_vec, transpose_b=True, name="pred_vt")
         v_t = tf.add(v_t, b_v, name="pred_vt")
         v_t = tf.transpose(v_t, name="pred_vt")
+        v_t = tf.nn.relu(v_t, name="pred_vt")
 
         pre_soft = tf.matmul(W_s, v_t, transpose_b=True, name="pred_pre_soft")
         pre_soft = tf.add(pre_soft, b_s, name="pred_pre_soft")
